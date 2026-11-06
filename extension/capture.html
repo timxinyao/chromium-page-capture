@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>正在采集页面</title>
+  <title>页面采集批次</title>
   <link rel="stylesheet" href="capture.css">
 </head>
 <body>
@@ -12,9 +12,25 @@
     <h1 id="title">正在准备</h1>
     <p id="status" class="status" role="status">正在连接当前标签页…</p>
     <div id="details" class="details"></div>
+    <p id="warning" class="warning"></p>
     <div class="progress"><span id="bar"></span></div>
+    <label for="note" class="field-label">下一份备注（选填）</label>
+    <textarea id="note" maxlength="4000" placeholder="业务页签、筛选条件或需要关注的接口"></textarea>
+    <div class="actions">
+      <button id="save" type="button" hidden>保存一次</button>
+      <button id="end" type="button" class="secondary" hidden>结束本批</button>
+      <button id="retry" type="button" hidden>重试失败文件</button>
+      <button id="recover" type="button" hidden>补导出已收数据并结束</button>
+      <button id="abandon" type="button" class="danger" hidden>放弃未保存数据并结束</button>
+      <button id="returnPage" type="button" class="secondary">返回业务页面</button>
+    </div>
+    <div id="abandonConfirmation" class="confirmation" hidden>
+      <p>将停止本批并丢弃尚未成功留档的数据。已经下载的文件保留，工具不会删除它们。</p>
+      <button id="confirmAbandon" type="button" class="danger">确认放弃并结束</button>
+      <button id="cancelAbandon" type="button" class="secondary">取消</button>
+    </div>
     <button id="closeCapture" class="close-button" type="button" hidden>关闭并返回原页面</button>
-    <p class="foot">仅导出 Fetch/XHR。note.txt 保存备注和采集说明。请保持此状态页打开，直到浏览器确认文件下载完成。</p>
+    <p class="foot">此状态页承载整个批次，请保持打开。可返回业务页面或关闭小面板继续操作。关闭此页、退出浏览器或重载扩展会丢失未保存缓存。仅导出 Fetch/XHR，note.txt 保存备注和覆盖说明。</p>
   </main>
   <script src="capture.js"></script>
 </body>

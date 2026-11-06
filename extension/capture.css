@@ -5,15 +5,26 @@ body { min-width: 320px; min-height: 100vh; margin: 0; display: grid; place-item
 .eyebrow { color: #2563eb; font-size: 10px; font-weight: 750; letter-spacing: .15em; }
 h1 { margin: 10px 0 9px; font-size: 24px; }
 .status { margin: 0; color: #475569; line-height: 1.6; }
-.details { margin-top: 14px; color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.details { margin-top: 14px; color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-line; }
 .progress { height: 5px; margin-top: 24px; border-radius: 99px; background: #e2e8f0; overflow: hidden; }
 .progress span { display: block; width: 24%; height: 100%; border-radius: inherit; background: #2563eb; animation: move 1.3s ease-in-out infinite alternate; }
 body.done .progress span { width: 100%; animation: none; background: #16a34a; }
 body.error .progress span { width: 100%; animation: none; background: #dc2626; }
-.close-button { margin-top: 20px; border: 0; border-radius: 9px; padding: 11px 18px; background: #1d4ed8; color: #fff; font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; }
-.close-button:hover { background: #1e40af; }
-.close-button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
-.close-button:disabled { opacity: .6; cursor: wait; }
-.close-button[hidden] { display: none; }
+button { border: 0; border-radius: 9px; padding: 11px 18px; background: #1d4ed8; color: #fff; font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; }
+button:hover { background: #1e40af; }
+button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+button:disabled { opacity: .6; cursor: wait; }
+[hidden] { display: none !important; }
+.close-button { margin-top: 20px; }
+.secondary { background: #e2e8f0; color: #1e293b; }
+.secondary:hover { background: #cbd5e1; }
+.danger { background: #b91c1c; }
+.danger:hover { background: #991b1b; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.field-label { display: block; margin: 20px 0 7px; font-size: 13px; }
+textarea { width: 100%; min-height: 80px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; font: inherit; resize: vertical; }
+.warning { white-space: pre-line; color: #92400e; font-size: 12px; line-height: 1.6; }
+.warning:empty { display: none; }
+.confirmation { margin-top: 16px; padding: 12px; border: 1px solid #fca5a5; border-radius: 8px; font-size: 13px; }
 .foot { margin: 14px 0 0; color: #94a3b8; font-size: 11px; line-height: 1.5; }
 @keyframes move { from { transform: translateX(0); } to { transform: translateX(300%); } }
