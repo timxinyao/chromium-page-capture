@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createHarness } = require("./capture-harness.cjs");
+const fs = require("node:fs");
+const path = require("node:path");
+const { createHarness, extension } = require("./capture-harness.cjs");
 
 async function begin(h) {
   await h.command("start", { tabId: 7, note: "首份" });
@@ -656,4 +658,48 @@ test("child frame navigation cannot replace current root page metadata", async (
   const note = (await h.files(2)).find((file) => file.filename.endsWith(".txt")).text;
   assert.match(note, /最终页面地址: https:\/\/root.test\/current/);
   assert.equal(note.includes("https://child.test/"), false);
+});
+
+test("return-to-page text promises continued recording only while collection is active", async () => {
+  const initialText = fs.readFileSync(path.join(extension, "capture.html"), "utf8")
+    .match(/id="returnPage"[^>]*>([^<]+)/)[1];
+  const h = createHarness({ autoComplete: false });
+  h.node("returnPage").textContent = initialText;
+  await h.command("start", { tabId: 7 });
+  h.emit("Page.loadEventFired");
+  await h.clock.advance(2600);
+  for (const file of h.downloads) h.finishDownload(file.id);
+  await h.flush();
+  assert.equal((await h.command("status")).view.phase, "recording");
+  assert.equal(h.node("returnPage").textContent, "返回业务页面，保持记录");
+
+  await h.command("save");
+  h.finishDownload(4);
+  h.finishDownload(5, "interrupted");
+  h.finishDownload(6);
+  await h.flush();
+  assert.equal((await h.command("status")).view.phase, "retry");
+  assert.equal(h.node("returnPage").textContent, "返回业务页面，保持记录");
+  await h.command("retry");
+  h.finishDownload(7);
+  await h.flush();
+
+  h.request("last");
+  await h.complete("last");
+  await h.command("end");
+  assert.equal(h.node("returnPage").textContent, "返回业务页面");
+  h.finishDownload(8);
+  h.finishDownload(9, "interrupted");
+  h.finishDownload(10);
+  await h.flush();
+  assert.equal((await h.command("status")).view.phase, "retry");
+  assert.equal(h.node("returnPage").textContent, "返回业务页面");
+
+  const interrupted = createHarness();
+  interrupted.node("returnPage").textContent = initialText;
+  await begin(interrupted);
+  interrupted.interrupt();
+  await interrupted.flush();
+  assert.equal((await interrupted.command("status")).view.phase, "interrupted");
+  assert.equal(interrupted.node("returnPage").textContent, "返回业务页面");
 });

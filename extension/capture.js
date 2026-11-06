@@ -571,6 +571,7 @@ function render() {
   node("recover").hidden = view.phase !== "interrupted";
   node("abandon").hidden = !["retry", "interrupted"].includes(view.phase);
   node("closeCapture").hidden = view.phase !== "ended" && view.phase !== "idle";
+  node("returnPage").textContent = session && session.collecting ? "返回业务页面，保持记录" : "返回业务页面";
   node("note").disabled = !["recording", "interrupted", "idle", "ended"].includes(view.phase);
   document.body.classList.remove("done", "error");
   if (view.phase === "ended") document.body.classList.add("done");
