@@ -13,3 +13,20 @@
 - 修改导出、过滤、生命周期或标签页行为后，运行 npm test 和 npm run check。VM 检查不等于真实浏览器验证，README 应写清实际覆盖范围。
 - 扩展版本保持 extension/manifest.json、extension/capture.js 的 CAPTURE_VERSION 和 package.json 一致，打包从 manifest 读取版本。
 - 公开说明以 README.md 为准；新增使用限制和完成状态就地更新，避免平行说明。
+
+## Agent skills
+
+### Issue tracker
+
+使用本地 Markdown，任务集中在 docs/tasks/<任务名>/。
+具体约定见 docs/agents/issue-tracker.md。
+
+### Triage labels
+
+使用五个默认分流标签。
+字段与含义见 docs/agents/triage-labels.md。
+
+### Domain docs
+
+采用单一领域布局：根目录 GLOSSARY.md 与 docs/adr/。
+读取约定见 docs/agents/domain.md。
