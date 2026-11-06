@@ -1,0 +1,16 @@
+{
+  "name": "chromium-page-capture",
+  "version": "0.1.4",
+  "private": true,
+  "description": "本地采集当前页面的 Fetch/XHR 网络记录、截图和备注",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/timxinyao/chromium-page-capture.git"
+  },
+  "scripts": {
+    "test": "node tests/capture-export.test.cjs",
+    "check": "node --check extension/capture.js && node --check extension/popup.js",
+    "package": "powershell -NoProfile -File scripts/package.ps1"
+  }
+}

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>正在采集页面</title>
+  <link rel="stylesheet" href="capture.css">
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">LOCAL CAPTURE</div>
+    <h1 id="title">正在准备</h1>
+    <p id="status" class="status" role="status">正在连接当前标签页…</p>
+    <div id="details" class="details"></div>
+    <div class="progress"><span id="bar"></span></div>
+    <button id="closeCapture" class="close-button" type="button" hidden>关闭并返回原页面</button>
+    <p class="foot">仅导出 Fetch/XHR。note.txt 保存备注和采集说明。请保持此状态页打开，直到浏览器确认文件下载完成。</p>
+  </main>
+  <script src="capture.js"></script>
+</body>
+</html>

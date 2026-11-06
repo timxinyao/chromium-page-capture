@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>页面采集器</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">LOCAL CAPTURE</div>
+      <h1>页面采集器</h1>
+      <p class="sub">整页截图 · Fetch/XHR JSON · 备注</p>
+    </header>
+    <label class="field-label" for="note">页面备注</label>
+    <textarea id="note" maxlength="4000" placeholder="写下页面用途、操作路径或需要关注的接口"></textarea>
+    <label class="check-row">
+      <input id="reload" type="checkbox" checked>
+      <span>重载后记录页面加载接口</span>
+    </label>
+    <p id="reloadHint" class="hint">开始后会重新加载当前页面，以便记录页面加载请求。请勿在正在提交或会改变数据的页面使用。</p>
+    <div id="status" class="status" role="status"></div>
+    <button id="start" type="button">开始采集</button>
+    <footer>只采集当前标签页；文件保存在浏览器下载目录。</footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

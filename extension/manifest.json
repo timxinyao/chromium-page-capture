@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "页面采集器",
+  "version": "0.1.4",
+  "description": "保存当前标签页的整页截图、Fetch/XHR JSON 网络记录和备注。",
+  "minimum_chrome_version": "105",
+  "permissions": [
+    "activeTab",
+    "debugger",
+    "downloads",
+    "storage"
+  ],
+  "action": {
+    "default_title": "采集当前页面",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+Y"
+      },
+      "description": "打开页面采集器"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+/dist/
+/node_modules/
+/captures/
+/work/
+
+# 本地凭据与实际采集数据
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.har
+*.crx
+**/PageCapture/
+**/page.json
+**/note.txt
+**/screenshot-full.png
