@@ -1,6 +1,6 @@
 # 批次采集 spec
 
-状态：待用户审核，尚未批准实施或合入。基线为 v0.1.4；本轮只准备文档，不修改产品代码或版本。
+状态：用户已批准本 spec，进入实施。基线为 v0.1.4，目标版本为 v0.2.0。用户已授权必要流程完成后合入、归档并清理本任务分支和 Git worktree；合入前须汇报具体版本、验证与独立审查结果。
 
 ## 1. 目标与范围
 
@@ -101,6 +101,6 @@ page.json 顶层始终为数组，每项只有 request、response。没有新接
 
 不包含自动遍历或翻页、重放业务请求、创建或修改业务记录、全浏览器后台监听、跨标签自动合并、跨重启恢复、WebSocket/SSE 消息帧、商店发布和外部数据上传。真实 HAR、截图、接口返回、备注和客户地址仍保留在仓库外，测试只用合成资料。
 
-本 spec 不拆票。审批本 spec 后才进入代码实施；合入 main 仍需另行批准对应最终版本。
+本 spec 不拆票。实施与收尾遵循用户已给出的授权：完成验证和独立审查，汇报最终版本及未验证范围后，合入 main、归档并按 Git worktree 原入口清理本任务资源。
 
 参考依据：[Chrome debugger / iframe](https://developer.chrome.com/docs/extensions/reference/api/debugger#work-with-frames)、[扩展 service worker 生命周期](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle#chrome-118)。官方能力、文档约定和实际浏览器测试分别报告。
