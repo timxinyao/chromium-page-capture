@@ -1,6 +1,6 @@
 {
   "name": "chromium-page-capture",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "本地采集当前页面的 Fetch/XHR 网络记录、截图和备注",
   "license": "MIT",

@@ -1,4 +1,4 @@
-const CAPTURE_VERSION = "0.2.0";
+const CAPTURE_VERSION = "0.2.1";
 const MAX_CAPTURE_MS = 20000;
 const SETTLE_MS = 2600;
 const SAVE_WAIT_MS = 5000;
@@ -1021,11 +1021,11 @@ function waitForCohort(batch, operation, maxMs) {
 function startSnapshot(batch, kind, note) {
   if (batch.operation || batch.snapshot) return;
   clearInitial(batch);
-  if (kind === "end" || kind === "recover") batch.collecting = false;
-  const operation = { kind, ending: kind === "end" || kind === "recover", keys: new Set(batch.records.keys()), note, frozen: false };
+  if (kind === "recover") batch.collecting = false;
+  const operation = { kind, ending: kind === "recover", keys: new Set(batch.records.keys()), note, frozen: false };
   batch.operation = operation;
   update(batch, operation.ending ? "ending" : "saving", operation.ending
-    ? "已截止新请求，最多等待 20 秒后补存未留档数据。"
+    ? "已停止记录，正在补导出已收到的数据。"
     : "正在准备本次接口增量和画面；新请求留给下一份。记录状态页需保持打开。");
   void prepareSnapshot(batch, operation).catch((error) => {
     batch.operation = null;
@@ -1090,8 +1090,8 @@ async function readCurrentPage(batch) {
 }
 
 async function prepareSnapshot(batch, operation) {
-  if (operation.kind === "save" || operation.kind === "end") {
-    await waitForCohort(batch, operation, operation.ending ? MAX_CAPTURE_MS : SAVE_WAIT_MS);
+  if (operation.kind === "save") {
+    await waitForCohort(batch, operation, SAVE_WAIT_MS);
   }
   // Pin eligibility at the deadline. A response arriving during screenshot capture goes into the next snapshot.
   operation.frozen = true;
@@ -1283,7 +1283,15 @@ function executeCommand(message) {
   } else if (!batch) error = "没有活动批次。";
   else if (message.batchId !== batch.id) error = "批次已变化，请重新打开面板确认当前批次。";
   else if (command === "save" && batch.phase === "recording") startSnapshot(batch, "save", note);
-  else if (command === "end" && batch.phase === "recording") startSnapshot(batch, "end", note);
+  else if (command === "end" && batch.phase === "recording") {
+    batch.collecting = false;
+    batch.resultsFrozen = true;
+    clearInitial(batch);
+    for (const key of batch.records.keys()) removeRecord(batch, key);
+    // Publish the cutoff before asynchronous lease release, blocking duplicate commands.
+    update(batch, "ending", "正在结束本批；未保存数据已丢弃，已下载文件保留。");
+    void finishBatch(batch, "本批已结束；未保存数据已丢弃，已下载文件保留。");
+  }
   else if (command === "recover" && batch.phase === "interrupted") startSnapshot(batch, "recover", note);
   else if (command === "retry" && batch.phase === "retry") void saveSnapshot(batch);
   else if (command === "abandon" && ["retry", "interrupted"].includes(batch.phase) && message.confirmed === true) {

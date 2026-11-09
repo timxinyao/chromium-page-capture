@@ -87,22 +87,35 @@ test("partial download failure retains the frozen frame and retries only failed 
   assert.equal((await page(h, 2)).length, 1);
 });
 
-test("ending has a fixed twenty second cutoff and exports unfinished request metadata", async () => {
+test("ending immediately discards completed and unfinished records without a screenshot or download, and permits a new batch", async () => {
   const h = createHarness();
   await begin(h);
+  h.request("completed");
+  await h.complete("completed");
   h.request("unfinished", { method: "PATCH" });
-  await h.command("end");
-  h.request("outside-cutoff");
-  await h.complete("outside-cutoff");
-  await h.clock.advance(19999);
-  assert.equal(h.downloads.length, 3);
-  await h.clock.advance(1);
-  const rows = await page(h, 2);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].request.method, "PATCH");
-  assert.equal(rows[0].response.status, 0);
-  assert.match((await h.files(2)).find((item) => item.filename.endsWith(".txt")).text, /未返回|尚未完成/);
-  assert.equal((await h.command("status")).view.phase, "ended");
+  const count = h.downloads.length;
+  const screenshots = h.operations.filter((item) => item.method === "Page.captureScreenshot").length;
+  const result = await h.command("end");
+  assert.equal(result.ok, true);
+  const view = (await h.command("status")).view;
+  assert.equal(view.phase, "ended");
+  assert.equal(view.unsavedCount, 0);
+  assert.equal(view.totalBodyBytes, 0);
+  assert.equal(view.metadataBytes, 0);
+  assert.match(view.message, /未保存数据已丢弃/);
+  assert.equal(h.downloads.length, count);
+  assert.equal(h.operations.filter((item) => item.method === "Page.captureScreenshot").length, screenshots);
+  h.request("unfinished", { params: { redirectResponse: { status: 302, headers: {}, mimeType: "text/html" } } });
+  await h.complete("unfinished");
+  assert.equal((await h.command("status")).view.unsavedCount, 0);
+  await h.command("start", { tabId: 7 });
+  h.emit("Page.loadEventFired");
+  await h.clock.advance(2600);
+  assert.equal((await h.command("status")).view.phase, "recording");
+  h.request("new-batch");
+  await h.complete("new-batch");
+  await h.command("save");
+  assert.equal((await page(h, 2)).length, 1);
 });
 
 test("viewport fallback and fully missing screenshot commit the required files", async () => {
@@ -195,7 +208,7 @@ test("a redirect remains in the original fixed cohort and retains both redirect 
   assert.deepEqual(await page(h, 3), []);
 });
 
-test("ending retries retain the same cutoff and require explicit confirmation to abandon", async () => {
+test("supplemental export retries retain the same cutoff and require explicit confirmation to abandon", async () => {
   const h = createHarness({ autoComplete: false });
   await h.command("start", { tabId: 7 });
   h.emit("Page.loadEventFired");
@@ -204,11 +217,11 @@ test("ending retries retain the same cutoff and require explicit confirmation to
   await h.flush();
   h.request("last");
   await h.complete("last");
-  await h.command("end");
-  assert.equal(h.downloads.length, 6);
+  h.interrupt();
+  await h.command("recover");
+  assert.equal(h.downloads.length, 5);
   h.finishDownload(4);
   h.finishDownload(5, "interrupted");
-  h.finishDownload(6);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "retry");
   assert.match((await h.command("status")).view.message, /截止新请求.*原末份/);
@@ -216,10 +229,10 @@ test("ending retries retain the same cutoff and require explicit confirmation to
   await h.complete("after-cutoff");
   assert.equal((await h.command("abandon")).ok, false);
   await h.command("retry");
-  h.finishDownload(7);
+  h.finishDownload(6);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "ended");
-  assert.equal(h.downloads.length, 7);
+  assert.equal(h.downloads.length, 6);
   assert.equal((await page(h, 2)).length, 1);
 
   const abandon = createHarness({ autoComplete: false });
@@ -521,29 +534,24 @@ test("existing nested iframe sessions enable their listeners before the only ini
   assert.equal((await page(h, 1)).length, 2);
 });
 
-test("ending freezes redirect segments and body results before a delayed screenshot finishes", async () => {
+test("ending ignores redirect and response events while debugger release is pending", async () => {
   const h = createHarness();
   await begin(h);
+  let release;
+  h.chrome.debugger.detach = () => new Promise((resolve) => { release = resolve; });
   h.request("late-redirect");
   await h.command("end");
-  let release;
-  h.setCommandHook((target, method) => {
-    if (method === "Page.captureScreenshot") return new Promise((resolve) => { release = resolve; });
-  });
-  await h.clock.advance(20000);
+  assert.equal((await h.command("status")).view.phase, "ending");
   h.request("late-redirect", { url: "https://customer.test/api/redirected", params: {
     redirectResponse: { status: 302, headers: {}, mimeType: "text/html" }
   } });
   await h.complete("late-redirect");
-  release({ data: "AA==" });
-  await h.flush();
-  const view = (await h.command("status")).view;
-  assert.equal(view.phase, "ended");
-  assert.equal(view.unsavedCount, 0);
-  assert.equal(view.totalBodyBytes, 0);
-  assert.equal((await page(h, 2)).length, 1);
-  assert.equal((await page(h, 2))[0].response.status, 0);
+  assert.equal((await h.command("status")).view.unsavedCount, 0);
   assert.equal(h.operations.filter((item) => item.method === "Network.getResponseBody").length, 0);
+  release();
+  await h.flush();
+  assert.equal((await h.command("status")).view.phase, "ended");
+  assert.equal(h.downloads.length, 3);
 });
 
 test("cross-origin page metadata comes from CDP when activeTab no longer exposes the tab URL or title", async () => {
@@ -563,7 +571,7 @@ test("cross-origin page metadata comes from CDP when activeTab no longer exposes
   h.request("last-origin", { url: "https://other.test/api/last" });
   await h.complete("last-origin");
   await h.command("end");
-  for (const index of [2, 3]) {
+  for (const index of [2]) {
     const note = (await h.files(index)).find((file) => file.filename.endsWith(".txt")).text;
     assert.match(note, /页面标题: 新域名页面/);
     assert.match(note, /最终页面地址: https:\/\/other.test\/new/);
@@ -589,25 +597,24 @@ test("unavailable current page metadata is explicitly unknown instead of copied 
   assert.equal(note.includes("最终页面地址: https://customer.test/page"), false);
 });
 
-test("sealed ending records ignore body promises resolving during screenshots or after the batch ended", async () => {
+test("discarded records ignore body promises resolving during release or after the batch ended", async () => {
   for (const afterEnd of [false, true]) {
     const h = createHarness();
     await begin(h);
-    h.request("late-body");
-    await h.command("end");
-    await h.clock.advance(19500);
     let body;
-    let screenshot;
+    let release;
     h.setCommandHook((target, method) => {
       if (method === "Network.getResponseBody") return new Promise((resolve) => { body = resolve; });
-      if (method === "Page.captureScreenshot") return new Promise((resolve) => { screenshot = resolve; });
     });
+    h.chrome.debugger.detach = () => new Promise((resolve) => { release = resolve; });
+    h.request("late-body");
     await h.complete("late-body");
-    await h.clock.advance(500);
+    assert.ok(body);
+    await h.command("end");
     if (!afterEnd) body({ body: '{"late":true}', base64Encoded: false });
     await h.flush();
     assert.equal((await h.command("status")).view.totalBodyBytes, 0);
-    screenshot({ data: "AA==" });
+    release();
     await h.flush();
     if (afterEnd) body({ body: '{"late":true}', base64Encoded: false });
     await h.flush();
@@ -615,11 +622,11 @@ test("sealed ending records ignore body promises resolving during screenshots or
     assert.equal(view.phase, "ended");
     assert.equal(view.totalBodyBytes, 0);
     assert.equal(view.unsavedCount, 0);
-    assert.equal(Object.hasOwn((await page(h, 2))[0].response.content, "text"), false);
+    assert.equal(h.downloads.length, 3);
   }
 });
 
-test("child setup callbacks finishing after the ending snapshot cannot reopen collection or body budgets", async () => {
+test("child setup callbacks finishing after ending cannot reopen collection or body budgets", async () => {
   const h = createHarness();
   await begin(h);
   let childSetup;
@@ -639,7 +646,7 @@ test("child setup callbacks finishing after the ending snapshot cannot reopen co
   assert.equal(view.phase, "ended");
   assert.equal(view.totalBodyBytes, 0);
   assert.equal(view.unsavedCount, 0);
-  assert.equal((await page(h, 2)).length, 1);
+  assert.equal(h.downloads.length, 3);
 });
 
 test("child frame navigation cannot replace current root page metadata", async () => {
@@ -688,12 +695,8 @@ test("return-to-page text promises continued recording only while collection is 
   await h.complete("last");
   await h.command("end");
   assert.equal(h.node("returnPage").textContent, "返回业务页面");
-  h.finishDownload(8);
-  h.finishDownload(9, "interrupted");
-  h.finishDownload(10);
-  await h.flush();
-  assert.equal((await h.command("status")).view.phase, "retry");
-  assert.equal(h.node("returnPage").textContent, "返回业务页面");
+  assert.equal((await h.command("status")).view.phase, "ended");
+  assert.equal(h.downloads.length, 7);
 
   const interrupted = createHarness();
   interrupted.node("returnPage").textContent = initialText;
