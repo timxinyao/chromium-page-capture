@@ -68,7 +68,7 @@ test("text/plain forms with empty segments and bare fields redact both body side
     { input: "flag&&token=synthetic-secret&tag=one&token=synthetic-repeat&tag=two&", expected: "flag&&token=%5BREDACTED%5D&tag=one&token=%5BREDACTED%5D&tag=two&" },
     { input: "tag=one&tag=two&flag&", expected: "tag=one&tag=two&flag&" },
     { input: "token=synthetic-secret&value=%FF&flag", omitted: true },
-    { input: "ordinary text with spaces & flag", plainText: true }
+    { input: "ordinary text with spaces & flag" }
   ];
   for (const [index, item] of cases.entries()) {
     const id = "form-" + index;
@@ -87,7 +87,7 @@ test("text/plain forms with empty segments and bare fields redact both body side
     } else {
       assert.equal(part.bodyStatus, "captured");
       assert.equal(part.bodyText, item.expected ?? item.input);
-      assert.equal(Boolean(part.bodyWarnings?.some((warning) => warning.code === "field-redaction-unsupported")), Boolean(item.plainText));
+      assert.equal(Object.hasOwn(part, "bodyWarnings"), false);
     }
   }
   assert.equal(JSON.stringify(doc).includes("synthetic-"), false);
@@ -154,7 +154,7 @@ test("safe JSON views preserve proto names while precise numbers and duplicate d
   assert.deepEqual(rows[5].response.body, { safe: 1 });
 });
 
-test("text MIME variants and mislabeled JSON retain content with accurate redaction warnings", async () => {
+test("text MIME variants retain complete content without routine policy warnings and mislabeled JSON is redacted", async () => {
   const h = createHarness();
   await begin(h);
   const cases = [["text/html", "<html><p>完整页面</p></html>"], ["application/xml", "<root token='plain'/>"],
@@ -170,9 +170,10 @@ test("text MIME variants and mislabeled JSON retain content with accurate redact
   const doc = await exported(h);
   for (const index of [0, 1, 2, 3, 4, 5]) for (const side of ["request", "response"]) {
     assert.equal(doc.entries[index][side].bodyText, cases[index][1]);
-    assert.ok(doc.entries[index][side].bodyWarnings.some((item) => item.code === "field-redaction-unsupported"));
-    assert.ok(doc.capture.warnings.some((item) => item.entry === index + 1 && item.side === side && item.code === "field-redaction-unsupported"));
+    assert.equal(doc.entries[index][side].bodyStatus, "captured");
+    assert.equal(Object.hasOwn(doc.entries[index][side], "bodyWarnings"), false);
   }
+  assert.equal(doc.capture.warnings.some((item) => item.code === "field-redaction-unsupported"), false);
   assert.deepEqual(doc.entries[6].response.body, { token: "[REDACTED]", ok: true });
   assert.equal(doc.entries[7].request.bodyText, "token=%5BREDACTED%5D&tag=1&tag=2");
   assert.equal(JSON.stringify(doc).includes("synthetic-"), false);

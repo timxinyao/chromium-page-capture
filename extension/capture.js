@@ -1,4 +1,4 @@
-const CAPTURE_VERSION = "0.3.0";
+const CAPTURE_VERSION = "0.3.1";
 const MAX_CAPTURE_MS = 20000;
 const SETTLE_MS = 2600;
 const SAVE_WAIT_MS = 5000;

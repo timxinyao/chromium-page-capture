@@ -103,7 +103,7 @@ test("privacy, supported body formats and original business fields survive froze
   assert.equal(rows[3].request.bodyText, "opaque-secret");
   assert.equal(JSON.parse(rows[4].response.bodyText).value, "中文");
   assert.match(JSON.stringify(capture.warnings), /multipart 无法可靠解析和脱敏/);
-  assert.match(JSON.stringify(capture.warnings), /原文未做字段级脱敏/);
+  assert.equal(capture.warnings.some((item) => item.code === "field-redaction-unsupported"), false);
 });
 
 test("network failure, unsupported MIME, missing body and streaming omissions remain diagnosable", async () => {

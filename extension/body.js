@@ -244,8 +244,7 @@ const BodyExport = (() => {
         try { result = { bodyStatus: "captured", bodyText: formText(text, sensitive) }; }
         catch (_) { return missing("omitted", "form-redaction-failed", "表单编码无法可靠解码和脱敏，已省略正文。"); }
       } else if (!isBinaryMime(mime) && textual(text)) {
-        result = { bodyStatus: "captured", bodyText: text, bodyWarnings: [warning("field-redaction-unsupported",
-          "HTML、XML、普通文本或 GraphQL 原文未做字段级脱敏。请按该范围处理正文。")] };
+        result = { bodyStatus: "captured", bodyText: text };
       } else return missing("omitted", "binary-body", "二进制或无法确认的文本正文已省略。");
     }
     if (byteLength(result.bodyText) > options.maxBytes) return missing("omitted", "body-size-limit", "脱敏后正文超过单条 2 MiB 保存上限。");
