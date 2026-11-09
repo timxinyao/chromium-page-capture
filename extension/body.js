@@ -115,7 +115,7 @@ const BodyExport = (() => {
   }
 
   function looksLikeForm(text) {
-    return text.includes("=") && text.split("&").every((part) => /^[^=\s<>"{}:?/]+=[^\r\n]*$/.test(part));
+    return text.includes("=") && text.split("&").every((part) => part === "" || /^[^=\s<>"{}:?/]+(?:=[^\r\n]*)?$/.test(part));
   }
 
   function textual(text) {

@@ -59,6 +59,65 @@ test("v2 keeps all JSON business values, empty text, error statuses and duplicat
   assert.deepEqual((await h.files(2)).map((file) => file.filename.split("/").pop()).sort(), ["page.json", "screenshot-full.png"]);
 });
 
+test("text/plain forms with empty segments and bare fields redact both body sides without rewriting other fields", async () => {
+  const h = createHarness();
+  await begin(h);
+  const cases = [
+    { input: "token=synthetic-secret&tag=one&", expected: "token=%5BREDACTED%5D&tag=one&" },
+    { input: "token=synthetic-secret&flag", expected: "token=%5BREDACTED%5D&flag" },
+    { input: "flag&&token=synthetic-secret&tag=one&token=synthetic-repeat&tag=two&", expected: "flag&&token=%5BREDACTED%5D&tag=one&token=%5BREDACTED%5D&tag=two&" },
+    { input: "tag=one&tag=two&flag&", expected: "tag=one&tag=two&flag&" },
+    { input: "token=synthetic-secret&value=%FF&flag", omitted: true },
+    { input: "ordinary text with spaces & flag", plainText: true }
+  ];
+  for (const [index, item] of cases.entries()) {
+    const id = "form-" + index;
+    h.request(id, { method: "POST", request: { headers: { "Content-Type": "text/plain" }, postData: item.input } });
+    h.bodies.set("root:" + id, item.input);
+    await h.complete(id, { response: { mimeType: "text/plain" } });
+  }
+  await h.command("save");
+  const doc = await exported(h);
+  for (const [index, item] of cases.entries()) for (const side of ["request", "response"]) {
+    const part = doc.entries[index][side];
+    if (item.omitted) {
+      assert.equal(part.bodyStatus, "omitted");
+      assert.equal(part.bodyError.code, "form-redaction-failed");
+      assert.equal(Object.hasOwn(part, "bodyText"), false);
+    } else {
+      assert.equal(part.bodyStatus, "captured");
+      assert.equal(part.bodyText, item.expected ?? item.input);
+      assert.equal(Boolean(part.bodyWarnings?.some((warning) => warning.code === "field-redaction-unsupported")), Boolean(item.plainText));
+    }
+  }
+  assert.equal(JSON.stringify(doc).includes("synthetic-"), false);
+});
+
+test("partially malformed encoded sensitive names redact URL and query consistently while preserving duplicate parameters", async () => {
+  const h = createHarness();
+  await begin(h);
+  const url = "https://customer.test/api?%74oken%ZZ=synthetic-secret&tag=one&%74oken%ZZ=synthetic-repeat&flag&%ZZ%74oken=synthetic-prefix&%74oken%FF=synthetic-utf8&label%26key=one%20two&broken%ZZ=ordinary%2Bvalue";
+  h.request("encoded-name", { url });
+  await h.complete("encoded-name");
+  await h.command("save");
+  const doc = await exported(h);
+  const request = doc.entries[0].request;
+  assert.equal(request.url, url.replace(/synthetic-(?:secret|repeat|prefix|utf8)/g, "[REDACTED]"));
+  assert.deepEqual(request.query, [
+    { name: "token%ZZ", value: "[REDACTED]" },
+    { name: "tag", value: "one" },
+    { name: "token%ZZ", value: "[REDACTED]" },
+    { name: "flag", value: "" },
+    { name: "%ZZtoken", value: "[REDACTED]" },
+    { name: "token\uFFFD", value: "[REDACTED]" },
+    { name: "label&key", value: "one two" },
+    { name: "broken%ZZ", value: "ordinary+value" }
+  ]);
+  const urlQuery = [...new URL(request.url).searchParams].map(([name, value]) => ({ name, value }));
+  assert.deepEqual(urlQuery, request.query);
+  assert.equal(JSON.stringify(doc).includes("synthetic-"), false);
+});
+
 test("JSON redaction preserves whitespace, number spelling, duplicate keys and escaped names", async () => {
   const h = createHarness();
   await begin(h);

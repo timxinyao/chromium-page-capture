@@ -56,13 +56,11 @@ function isExtensionRequest(params) {
 
 
 function isSensitiveKey(name) {
-  const value = String(name || "").replace(/\+/g, " ");
+  const value = String(name || "");
   if (SENSITIVE_KEY.test(value)) return true;
-  try {
-    return SENSITIVE_KEY.test(decodeURIComponent(value));
-  } catch (_) {
-    return false;
-  }
+  // Match the browser's forgiving name decoding without splitting literal ampersands.
+  const decoded = new URLSearchParams("name=" + value.replace(/&/g, "%26")).get("name");
+  return SENSITIVE_KEY.test(decoded);
 }
 
 function redactQueryValuesInText(text) {
