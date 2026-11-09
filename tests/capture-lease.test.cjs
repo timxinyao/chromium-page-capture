@@ -272,7 +272,7 @@ test("worker suspension and control reconnection preserve a live host and its ac
   await owner.h.complete("after-worker-suspend");
   await owner.h.command("save");
   const file = (await owner.h.files(2)).find((item) => item.filename.endsWith("/page.json"));
-  assert.equal(JSON.parse(file.text).length, 1);
+  assert.equal(JSON.parse(file.text).entries.length, 1);
   assert.equal(r.operations.filter((item) => item.kind === "attach").length, 1);
   assert.equal(r.operations.filter((item) => item.kind === "detach").length, 0);
   await owner.h.command("end");

@@ -14,8 +14,8 @@
     <div id="details" class="details"></div>
     <p id="warning" class="warning"></p>
     <div class="progress"><span id="bar"></span></div>
-    <label for="note" class="field-label">下一份备注（选填）</label>
-    <textarea id="note" maxlength="4000" placeholder="业务页签、筛选条件或需要关注的接口"></textarea>
+    <label for="note" class="field-label">下一份备注（选填，用作文件夹名）</label>
+    <textarea id="note" maxlength="4000" placeholder="文件夹名可填写业务页签或筛选条件，留空自动编号"></textarea>
     <div class="actions">
       <button id="save" type="button" hidden>保存一次</button>
       <button id="end" type="button" class="secondary" hidden>结束本批</button>
@@ -30,8 +30,9 @@
       <button id="cancelAbandon" type="button" class="secondary">取消</button>
     </div>
     <button id="closeCapture" class="close-button" type="button" hidden>关闭并返回原页面</button>
-    <p class="foot">结束本批会丢弃未保存数据，请先按需保存一次。此状态页承载整个批次，请保持打开。可返回业务页面或关闭小面板继续操作。关闭此页、退出浏览器或重载扩展会丢失未保存缓存。仅导出 Fetch/XHR，note.txt 保存备注和覆盖说明。</p>
+    <p class="foot">结束本批会丢弃未保存数据，请先按需保存一次。此状态页承载整个批次，请保持打开。可返回业务页面或关闭小面板继续操作。关闭此页、退出浏览器或重载扩展会丢失未保存缓存。仅导出 Fetch/XHR，page.json 保存完整备注和覆盖说明。</p>
   </main>
+  <script src="body.js"></script>
   <script src="capture.js"></script>
 </body>
 </html>

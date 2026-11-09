@@ -12,8 +12,8 @@ async function begin(h) {
 async function output(h, sequence = 2) {
   const files = await h.files(sequence);
   return {
-    rows: JSON.parse(files.find((file) => file.filename.endsWith("/page.json")).text),
-    note: files.find((file) => file.filename.endsWith("/note.txt")).text
+    rows: JSON.parse(files.find((file) => file.filename.endsWith("/page.json")).text).entries,
+    capture: JSON.parse(files.find((file) => file.filename.endsWith("/page.json")).text).capture
   };
 }
 
@@ -33,14 +33,12 @@ test("export keeps only Fetch/XHR methods and separates diagnostics from the bus
   h.request("reclassified", { type: "Other" });
   await h.complete("reclassified", { type: "XHR" });
   await h.command("save", { note: "文件对应检查" });
-  const { rows, note } = await output(h);
+  const { rows, capture } = await output(h);
   assert.equal(rows.length, 15);
   for (const row of rows) assert.deepEqual(Object.keys(row).sort(), ["request", "response"]);
   for (const method of methods) assert.ok(rows.some((row) => row.request.method === method));
-  assert.match(note, /文件对应检查/);
-  assert.match(note, /采集范围: Fetch \/ XHR/);
-  assert.match(note, /请求类别: XHR/);
-  assert.match(note, /总耗时\(ms\)/);
+  assert.equal(capture.note, "文件对应检查");
+  assert.deepEqual(capture.warnings, []);
   assert.equal(h.operations.filter((operation) => operation.method === "Network.getResponseBody").length, 15);
 });
 
@@ -63,9 +61,10 @@ test("extension attribution and associated preflights are scoped to their child 
     await h.complete(id);
   }
   await h.command("save");
-  const { rows, note } = await output(h);
+  const { rows, capture } = await output(h);
   assert.equal(rows.length, 2);
-  assert.match(note, /排除扩展请求数: 5/);
+  assert.match(JSON.stringify(capture.warnings), /动态 iframe/);
+  assert.equal((await h.command("status")).view.unsavedCount, 0);
   assert.equal(h.operations.filter((item) => item.method === "Network.getResponseBody").length, 2);
   assert.ok(h.operations.some((item) => item.method === "Runtime.runIfWaitingForDebugger" && item.target.sessionId === "child"));
 });
@@ -94,17 +93,17 @@ test("privacy, supported body formats and original business fields survive froze
   h.request("base64");
   await h.complete("base64");
   await h.command("save");
-  const { rows, note } = await output(h);
+  const { rows, capture } = await output(h);
   const encoded = JSON.stringify(rows);
-  for (const secret of ["response-secret", "request-secret", "header-secret", "url-secret", "referer-secret", "form-secret", "opaque-secret", "base64-secret"]) assert.equal(encoded.includes(secret), false, secret);
-  assert.equal(JSON.parse(rows[0].response.content.text)._capture.business, true);
-  assert.equal(JSON.parse(rows[0].request.postData.text).__proto__.business, true);
-  assert.equal(rows[1].request.postData.text, "token=%5BREDACTED%5D&value=7");
-  assert.equal(Object.hasOwn(rows[2].request, "postData"), false);
-  assert.equal(Object.hasOwn(rows[3].request, "postData"), false);
-  assert.equal(JSON.parse(rows[4].response.content.text).value, "中文");
-  assert.match(note, /multipart 表单正文已省略/);
-  assert.match(note, /无法按已支持格式脱敏的请求正文已省略/);
+  for (const secret of ["response-secret", "request-secret", "header-secret", "url-secret", "referer-secret", "form-secret", "base64-secret"]) assert.equal(encoded.includes(secret), false, secret);
+  assert.equal(JSON.parse(rows[0].response.bodyText)._capture.business, true);
+  assert.equal(JSON.parse(rows[0].request.bodyText).__proto__.business, true);
+  assert.equal(rows[1].request.bodyText, "token=%5BREDACTED%5D&value=7");
+  assert.equal(Object.hasOwn(rows[2].request, "bodyText"), false);
+  assert.equal(rows[3].request.bodyText, "opaque-secret");
+  assert.equal(JSON.parse(rows[4].response.bodyText).value, "中文");
+  assert.match(JSON.stringify(capture.warnings), /multipart 无法可靠解析和脱敏/);
+  assert.match(JSON.stringify(capture.warnings), /原文未做字段级脱敏/);
 });
 
 test("network failure, unsupported MIME, missing body and streaming omissions remain diagnosable", async () => {
@@ -122,11 +121,11 @@ test("network failure, unsupported MIME, missing body and streaming omissions re
   h.request("stream");
   h.emit("Network.responseReceived", { requestId: "stream", type: "Fetch", response: { status: 200, mimeType: "text/event-stream", headers: {} } });
   await h.command("save");
-  const { rows, note } = await output(h);
+  const { rows, capture } = await output(h);
   assert.equal(rows.length, 4);
   assert.equal(rows[0].response.status, 0);
-  assert.match(rows[0].response.statusText, /ERR_CONNECTION_RESET/);
-  for (const text of ["请求失败", "响应正文类型不在保存范围", "浏览器未能提供响应正文", "流式消息正文未记录"]) assert.ok(note.includes(text));
+  assert.match(rows[0].response.networkError, /ERR_CONNECTION_RESET/);
+  for (const text of ["请求失败", "二进制", "浏览器未能提供响应正文", "流式消息正文未记录"]) assert.ok(JSON.stringify(capture.warnings).includes(text), text);
 });
 
 test("terminal close returns to the business tab and cannot close an active batch", async () => {

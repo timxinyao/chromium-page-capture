@@ -1,6 +1,6 @@
 {
   "name": "chromium-page-capture",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "本地采集当前页面的 Fetch/XHR 网络记录、截图和备注",
   "license": "MIT",
@@ -9,8 +9,8 @@
     "url": "https://github.com/timxinyao/chromium-page-capture.git"
   },
   "scripts": {
-    "test": "node --test tests/capture-export.test.cjs tests/batch-capture.test.cjs tests/capture-router.test.cjs tests/capture-lease.test.cjs",
-    "check": "node --check extension/capture.js && node --check extension/popup.js && node --check extension/background.js",
+    "test": "node --test tests/readable-export.test.cjs tests/capture-export.test.cjs tests/batch-capture.test.cjs tests/capture-router.test.cjs tests/capture-lease.test.cjs",
+    "check": "node --check extension/body.js && node --check extension/capture.js && node --check extension/popup.js && node --check extension/background.js",
     "package": "powershell -NoProfile -File scripts/package.ps1"
   }
 }

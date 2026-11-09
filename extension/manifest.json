@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "页面采集器",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "持续记录当前标签页，分次保存整页截图、Fetch/XHR JSON 和备注。",
   "minimum_chrome_version": "105",
   "permissions": [
