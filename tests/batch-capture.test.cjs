@@ -14,8 +14,14 @@ async function begin(h) {
 async function page(h, sequence) {
   const file = (await h.files(sequence)).find((item) => item.filename.endsWith("/page.json"));
   assert.ok(file, "page.json for snapshot " + sequence);
-  return JSON.parse(file.text);
+  return JSON.parse(file.text).entries;
 }
+
+async function capture(h, sequence) {
+  const file = (await h.files(sequence)).find((item) => item.filename.endsWith("/page.json"));
+  return JSON.parse(file.text).capture;
+}
+async function warningText(h, sequence) { return JSON.stringify((await capture(h, sequence)).warnings); }
 
 test("one initial reload then three independent incremental snapshots and an empty manual snapshot", async () => {
   const h = createHarness();
@@ -48,10 +54,10 @@ test("fixed five second cohort keeps late and newly arriving requests for the ne
   h.request("new");
   await h.complete("new");
   await h.clock.advance(4999);
-  assert.equal(h.downloads.length, 3);
+  assert.equal(h.downloads.length, 2);
   await h.clock.advance(1);
   assert.deepEqual(await page(h, 2), []);
-  assert.match((await h.files(2)).find((file) => file.filename.endsWith(".txt")).text, /未完成请求: 1/);
+  assert.equal((await capture(h, 2)).warnings.find((item) => item.code === "pending-requests").count, 1);
   await h.complete("slow");
   await h.command("save");
   assert.equal((await page(h, 3)).length, 2);
@@ -62,10 +68,9 @@ test("partial download failure retains the frozen frame and retries only failed 
   await h.command("start", { tabId: 7 });
   h.emit("Page.loadEventFired");
   await h.clock.advance(2600);
-  assert.equal(h.downloads.length, 3);
+  assert.equal(h.downloads.length, 2);
   h.finishDownload(1);
   h.finishDownload(2, "interrupted");
-  h.finishDownload(3);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "retry");
   const captureCount = h.operations.filter((item) => item.method === "Page.captureScreenshot").length;
@@ -76,11 +81,11 @@ test("partial download failure retains the frozen frame and retries only failed 
   assert.equal((await h.command("end")).ok, false);
   await h.command("retry");
   await h.command("retry");
-  assert.equal(h.downloads.length, 4);
-  assert.equal(h.downloads[1].filename, h.downloads[3].filename);
-  assert.equal(await h.downloads[1].blob.text(), await h.downloads[3].blob.text());
+  assert.equal(h.downloads.length, 3);
+  assert.equal(h.downloads[1].filename, h.downloads[2].filename);
+  assert.equal(await h.downloads[1].blob.text(), await h.downloads[2].blob.text());
   assert.equal(h.operations.filter((item) => item.method === "Page.captureScreenshot").length, captureCount);
-  h.finishDownload(4);
+  h.finishDownload(3);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "recording");
   await h.command("save");
@@ -122,15 +127,15 @@ test("viewport fallback and fully missing screenshot commit the required files",
   const h = createHarness();
   h.failScreenshots(true);
   await begin(h);
-  assert.match((await h.files(1)).find((item) => item.filename.endsWith(".txt")).text, /当前视口/);
+  assert.equal((await capture(h, 1)).screenshot.scope, "viewport");
   h.failScreenshots(true, true);
   h.request("missing-frame");
   await h.complete("missing-frame");
   await h.command("save");
-  assert.equal((await h.files(2)).length, 2);
+  assert.equal((await h.files(2)).length, 1);
   assert.match((await h.command("status")).view.message, /接口已保存，截图失败/);
   await h.command("end");
-  assert.equal(h.downloads.length, 5);
+  assert.equal(h.downloads.length, 3);
   assert.match((await h.command("status")).view.warning, /接口已保存，截图失败/);
 });
 
@@ -162,7 +167,7 @@ test("interruption stops recording without reconnecting and allows an incomplete
   assert.equal((await h.command("status")).view.phase, "interrupted");
   await h.command("recover");
   assert.equal((await page(h, 2)).length, 1);
-  assert.equal((await h.files(2)).length, 2);
+  assert.equal((await h.files(2)).length, 1);
   assert.equal((await h.command("status")).view.phase, "ended");
   assert.equal(h.operations.filter((item) => item.kind === "attach").length, 1);
   assert.equal(h.operations.filter((item) => item.method === "Page.reload").length, 1);
@@ -180,15 +185,15 @@ test("duplicate commands, child load events and initial timeout never create a s
   assert.equal(h.downloads.length, 0);
   h.request("still-pending");
   await h.clock.advance(17400);
-  assert.equal(h.downloads.length, 3);
+  assert.equal(h.downloads.length, 2);
   assert.deepEqual(await page(h, 1), []);
-  const first = (await h.files(1)).find((item) => item.filename.endsWith(".txt")).text;
-  assert.match(first, /未完成请求: 1/);
+  const first = await warningText(h, 1);
+  assert.equal((await capture(h, 1)).warnings.find((item) => item.code === "pending-requests").count, 1);
   assert.match(first, /首次准备 20 秒/);
   await h.complete("still-pending");
   await h.command("save", { commandId: "save-once" });
   await h.command("save", { commandId: "save-once" });
-  assert.equal(h.downloads.length, 6);
+  assert.equal(h.downloads.length, 4);
   assert.equal((await page(h, 2)).length, 1);
   assert.equal(h.operations.filter((item) => item.method === "Page.reload").length, 1);
 });
@@ -200,7 +205,7 @@ test("a redirect remains in the original fixed cohort and retains both redirect 
   await h.command("save");
   h.request("redirect", { url: "https://customer.test/api/new", params: { redirectResponse: { status: 302, headers: { location: "https://customer.test/api/new" }, mimeType: "text/html" } } });
   await h.clock.advance(1000);
-  assert.equal(h.downloads.length, 3, "the completed redirect segment must not end the cohort before its continuation");
+  assert.equal(h.downloads.length, 2, "the completed redirect segment must not end the cohort before its continuation");
   await h.complete("redirect");
   assert.equal((await page(h, 2)).length, 2);
   assert.deepEqual((await page(h, 2)).map((entry) => entry.response.status), [302, 200]);
@@ -219,9 +224,8 @@ test("supplemental export retries retain the same cutoff and require explicit co
   await h.complete("last");
   h.interrupt();
   await h.command("recover");
-  assert.equal(h.downloads.length, 5);
-  h.finishDownload(4);
-  h.finishDownload(5, "interrupted");
+  assert.equal(h.downloads.length, 3);
+  h.finishDownload(3, "interrupted");
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "retry");
   assert.match((await h.command("status")).view.message, /截止新请求.*原末份/);
@@ -229,10 +233,10 @@ test("supplemental export retries retain the same cutoff and require explicit co
   await h.complete("after-cutoff");
   assert.equal((await h.command("abandon")).ok, false);
   await h.command("retry");
-  h.finishDownload(6);
+  h.finishDownload(4);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "ended");
-  assert.equal(h.downloads.length, 6);
+  assert.equal(h.downloads.length, 4);
   assert.equal((await page(h, 2)).length, 1);
 
   const abandon = createHarness({ autoComplete: false });
@@ -241,11 +245,10 @@ test("supplemental export retries retain the same cutoff and require explicit co
   await abandon.clock.advance(2600);
   abandon.finishDownload(1);
   abandon.finishDownload(2, "interrupted");
-  abandon.finishDownload(3);
   await abandon.flush();
   await abandon.command("abandon", { confirmed: true });
   assert.equal((await abandon.command("status")).view.phase, "ended");
-  assert.equal(abandon.downloads.length, 3, "already downloaded files are retained");
+  assert.equal(abandon.downloads.length, 2, "already downloaded files are retained");
   assert.equal((await abandon.command("status")).view.unsavedCount, 0);
 });
 
@@ -255,15 +258,14 @@ test("a timed-out download that completes late is queried and never downloaded t
   h.emit("Page.loadEventFired");
   await h.clock.advance(2600);
   h.finishDownload(1);
-  h.finishDownload(3);
   await h.clock.advance(120000);
   assert.equal((await h.command("status")).view.phase, "retry");
   await h.command("retry");
-  assert.equal(h.downloads.length, 3, "retry waits on an existing in-progress ID");
+  assert.equal(h.downloads.length, 2, "retry waits on an existing in-progress ID");
   h.finishDownload(2);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "recording");
-  assert.equal(h.downloads.length, 3);
+  assert.equal(h.downloads.length, 2);
   assert.equal(h.objects.size, 0);
 });
 
@@ -296,13 +298,11 @@ test("disconnect during save keeps its snapshot, then permits a separate supplem
   h.interrupt();
   h.finishDownload(1);
   h.finishDownload(2);
-  h.finishDownload(3);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "interrupted");
   await h.command("recover");
-  assert.equal((await h.files(2)).length, 2);
-  h.finishDownload(4);
-  h.finishDownload(5);
+  assert.equal((await h.files(2)).length, 1);
+  h.finishDownload(3);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "ended");
   assert.equal((await page(h, 2)).length, 1);
@@ -324,7 +324,7 @@ test("child setup failure or detach surfaces incomplete coverage, while old kern
   h.emit("Target.detachedFromTarget", { sessionId: "good-child" });
   await h.command("save");
   assert.equal((await page(h, 2)).length, 1);
-  assert.match((await h.files(2)).find((item) => item.filename.endsWith(".txt")).text, /缺少完整返回/);
+  assert.match(await warningText(h, 2), /缺少完整返回/);
   const old = createHarness({ major: 105 });
   await begin(old);
   old.request("root");
@@ -348,16 +348,16 @@ test("body limits are per record and uncommitted batch; successful snapshots rel
   await h.command("save");
   const rows = await page(h, 2);
   assert.equal(rows.length, 13);
-  assert.equal(rows.filter((entry) => typeof entry.response.content.text === "string").length, 12);
-  assert.match((await h.files(2)).find((item) => item.filename.endsWith(".txt")).text, /响应正文累计大小超过保存上限/);
+  assert.equal(rows.filter((entry) => typeof entry.response.bodyText === "string").length, 12);
+  assert.match(await warningText(h, 2), /正文累计大小超过/);
   assert.equal((await h.command("status")).view.totalBodyBytes, 0);
   assert.equal((await h.command("status")).view.metadataBytes, 0);
   h.bodies.set("root:oversized", twoMiB + "x");
   h.request("oversized");
   await h.complete("oversized", { response: { mimeType: "text/plain" } });
   await h.command("save");
-  assert.equal(Object.hasOwn((await page(h, 3))[0].response.content, "text"), false);
-  assert.match((await h.files(3)).find((item) => item.filename.endsWith(".txt")).text, /单条保存上限/);
+  assert.equal(Object.hasOwn((await page(h, 3))[0].response, "bodyText"), false);
+  assert.match(await warningText(h, 3), /单条.*保存上限/);
 });
 
 test("record and metadata resource limits stop new collection while preserving supplemental export", async () => {
@@ -414,27 +414,26 @@ test("a failed ordinary snapshot commits identities only after retry and exclude
   await h.command("save", { note: "原备注" });
   h.request("next", { url: "https://customer.test/api/data?call=next" });
   await h.complete("next");
-  h.finishDownload(4);
-  h.finishDownload(5);
-  h.finishDownload(6, "interrupted");
+  h.finishDownload(3);
+  h.finishDownload(4, "interrupted");
   await h.flush();
   assert.equal((await h.command("status")).view.unsavedCount, 2);
-  const originalFrame = await h.downloads[5].blob.text();
+  const originalFrame = await h.downloads[3].blob.text();
   h.setScreenshot("new-screen");
   await h.command("retry", { note: "不能替换原备注" });
-  assert.equal(h.downloads.length, 7);
-  assert.equal(await h.downloads[6].blob.text(), originalFrame);
-  h.finishDownload(7);
+  assert.equal(h.downloads.length, 5);
+  assert.equal(await h.downloads[4].blob.text(), originalFrame);
+  h.finishDownload(5);
   await h.flush();
   assert.equal((await h.command("status")).view.unsavedCount, 1);
   await h.command("save");
   assert.deepEqual((await page(h, 3)).map((row) => new URL(row.request.url).searchParams.get("call")), ["next"]);
-  const originalNotes = (await h.files(2)).find((item) => item.filename.endsWith(".txt")).text;
+  const originalNotes = (await capture(h, 2)).note;
   assert.match(originalNotes, /原备注/);
   assert.equal(originalNotes.includes("不能替换"), false);
 });
 
-test("fully missing screenshot does not commit the records until JSON and notes both complete", async () => {
+test("fully missing screenshot commits only after its JSON completes", async () => {
   const h = createHarness({ autoComplete: false });
   h.failScreenshots(true, true);
   await h.command("start", { tabId: 7 });
@@ -442,16 +441,15 @@ test("fully missing screenshot does not commit the records until JSON and notes 
   await h.complete("api");
   h.emit("Page.loadEventFired");
   await h.clock.advance(2600);
-  assert.equal(h.downloads.length, 2);
-  h.finishDownload(1);
-  await h.flush();
+  assert.equal(h.downloads.length, 1);
   assert.equal((await h.command("status")).view.phase, "saving");
   assert.equal((await h.command("status")).view.unsavedCount, 1);
-  h.finishDownload(2);
+  h.finishDownload(1);
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "recording");
   assert.equal((await h.command("status")).view.unsavedCount, 0);
   assert.match((await h.command("status")).view.message, /接口已保存，截图失败/);
+  assert.match(await warningText(h, 1), /截图失败/);
 });
 
 test("stale batch commands cannot save or end the next batch in a reused state page", async () => {
@@ -468,7 +466,7 @@ test("stale batch commands cannot save or end the next batch in a reused state p
     assert.equal((await h.command(command, { batchId: old, confirmed: true })).ok, false);
   }
   assert.equal((await h.command("status")).view.phase, "recording");
-  assert.equal(h.downloads.length, 6);
+  assert.equal(h.downloads.length, 4);
 });
 
 test("an interrupted pending attach is cleaned up before a new batch is allowed", async () => {
@@ -551,7 +549,7 @@ test("ending ignores redirect and response events while debugger release is pend
   release();
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "ended");
-  assert.equal(h.downloads.length, 3);
+  assert.equal(h.downloads.length, 2);
 });
 
 test("cross-origin page metadata comes from CDP when activeTab no longer exposes the tab URL or title", async () => {
@@ -572,11 +570,11 @@ test("cross-origin page metadata comes from CDP when activeTab no longer exposes
   await h.complete("last-origin");
   await h.command("end");
   for (const index of [2]) {
-    const note = (await h.files(index)).find((file) => file.filename.endsWith(".txt")).text;
-    assert.match(note, /页面标题: 新域名页面/);
-    assert.match(note, /最终页面地址: https:\/\/other.test\/new/);
-    assert.equal(note.includes("token=private"), false);
-    assert.equal(note.includes("最终页面地址: https://customer.test/page"), false);
+    const current = await capture(h, index);
+    assert.equal(current.pageTitle, "新域名页面");
+    assert.match(current.pageUrl, /^https:\/\/other.test\/new/);
+    assert.equal(current.pageUrl.includes("token=private"), false);
+    assert.notEqual(current.pageUrl, "https://customer.test/page");
   }
   assert.equal((await h.command("status")).view.folder, folder);
 });
@@ -591,10 +589,10 @@ test("unavailable current page metadata is explicitly unknown instead of copied 
   h.emit("Page.frameNavigated", { frame: { id: "root", url: "https://other.test/new" } });
   h.emit("Page.frameStartedLoading", { frameId: "root" });
   await h.command("save");
-  const note = (await h.files(2)).find((file) => file.filename.endsWith(".txt")).text;
-  assert.match(note, /最终页面地址: .*未知/);
-  assert.match(note, /页面标题: .*未知/);
-  assert.equal(note.includes("最终页面地址: https://customer.test/page"), false);
+  const current = await capture(h, 2);
+  assert.match(current.pageUrl, /未知/);
+  assert.match(current.pageTitle, /未知/);
+  assert.notEqual(current.pageUrl, "https://customer.test/page");
 });
 
 test("discarded records ignore body promises resolving during release or after the batch ended", async () => {
@@ -622,7 +620,7 @@ test("discarded records ignore body promises resolving during release or after t
     assert.equal(view.phase, "ended");
     assert.equal(view.totalBodyBytes, 0);
     assert.equal(view.unsavedCount, 0);
-    assert.equal(h.downloads.length, 3);
+    assert.equal(h.downloads.length, 2);
   }
 });
 
@@ -646,7 +644,7 @@ test("child setup callbacks finishing after ending cannot reopen collection or b
   assert.equal(view.phase, "ended");
   assert.equal(view.totalBodyBytes, 0);
   assert.equal(view.unsavedCount, 0);
-  assert.equal(h.downloads.length, 3);
+  assert.equal(h.downloads.length, 2);
 });
 
 test("child frame navigation cannot replace current root page metadata", async () => {
@@ -662,9 +660,9 @@ test("child frame navigation cannot replace current root page metadata", async (
   h.emit("Page.frameNavigated", { frame: { id: "child-root", url: "https://child.test/frame" } }, "child");
   h.emit("Page.navigatedWithinDocument", { frameId: "root", url: "https://child.test/wrong" }, "child");
   await h.command("save");
-  const note = (await h.files(2)).find((file) => file.filename.endsWith(".txt")).text;
-  assert.match(note, /最终页面地址: https:\/\/root.test\/current/);
-  assert.equal(note.includes("https://child.test/"), false);
+  const current = await capture(h, 2);
+  assert.equal(current.pageUrl, "https://root.test/current");
+  assert.equal(current.pageUrl.includes("https://child.test/"), false);
 });
 
 test("return-to-page text promises continued recording only while collection is active", async () => {
@@ -681,14 +679,13 @@ test("return-to-page text promises continued recording only while collection is 
   assert.equal(h.node("returnPage").textContent, "返回业务页面，保持记录");
 
   await h.command("save");
-  h.finishDownload(4);
-  h.finishDownload(5, "interrupted");
-  h.finishDownload(6);
+  h.finishDownload(3);
+  h.finishDownload(4, "interrupted");
   await h.flush();
   assert.equal((await h.command("status")).view.phase, "retry");
   assert.equal(h.node("returnPage").textContent, "返回业务页面，保持记录");
   await h.command("retry");
-  h.finishDownload(7);
+  h.finishDownload(5);
   await h.flush();
 
   h.request("last");
@@ -696,7 +693,7 @@ test("return-to-page text promises continued recording only while collection is 
   await h.command("end");
   assert.equal(h.node("returnPage").textContent, "返回业务页面");
   assert.equal((await h.command("status")).view.phase, "ended");
-  assert.equal(h.downloads.length, 7);
+  assert.equal(h.downloads.length, 5);
 
   const interrupted = createHarness();
   interrupted.node("returnPage").textContent = initialText;

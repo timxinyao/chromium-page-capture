@@ -91,10 +91,10 @@ test("simultaneous start dispatches share one host and idempotent command, even 
   r.fireWithoutResponse({ channel: "page-capture-router", command: "save", commandId: "lost-save" });
   await r.host.flush();
   r.loseReplies(false);
-  assert.equal(r.host.downloads.length, 6, "host saving must survive the vanished popup response");
+  assert.equal(r.host.downloads.length, 4, "host saving must survive the vanished popup response");
   const retry = await r.route("save", { commandId: "lost-save" });
   assert.equal(retry.duplicate, true);
-  assert.equal(r.host.downloads.length, 6);
+  assert.equal(r.host.downloads.length, 4);
 });
 
 test("router restarts rediscover the exact host, and stale ended pages cannot answer its messages", async () => {
@@ -156,7 +156,7 @@ test("popup reopen displays an existing batch and its save/end controls without 
   assert.equal(node("start").hidden, true);
   node("note").value = "小面板补充备注";
   await handlers["save:click"]();
-  assert.match((await r.host.files(2)).find((item) => item.filename.endsWith(".txt")).text, /小面板补充备注/);
+  assert.equal(JSON.parse((await r.host.files(2)).find((item) => item.filename.endsWith(".json")).text).capture.note, "小面板补充备注");
   handlers["window:unload"]();
   assert.equal(intervals.size, 0);
   r.host.request("after-popup-closed");

@@ -124,7 +124,7 @@ function createHarness(options = {}) {
         }
         if (method === "Network.getResponseBody") {
           const key = (target.sessionId || "root") + ":" + params.requestId;
-          return { body: bodies.get(key) || '{"value":1}', base64Encoded: false };
+          return { body: bodies.get(key) ?? '{"value":1}', base64Encoded: false };
         }
         return {};
       }
@@ -160,6 +160,8 @@ function createHarness(options = {}) {
     window: { close() {}, addEventListener(name, handler) { windowHandlers.set(name, handler); } }, console
   });
   const source = fs.readFileSync(path.join(options.sourceDirectory || process.env.CAPTURE_TEST_SOURCE_DIRECTORY || extension, "capture.js"), "utf8");
+  const bodySource = fs.readFileSync(path.join(options.sourceDirectory || process.env.CAPTURE_TEST_SOURCE_DIRECTORY || extension, "body.js"), "utf8");
+  vm.runInContext(bodySource, context, { filename: "body.js" });
   vm.runInContext(source, context, { filename: "capture.js" });
   function emit(method, params = {}, sessionId = "") {
     (options.debuggerEvents || debuggerEvent).emit({ tabId: 7, ...(sessionId ? { sessionId } : {}) }, method, params);
@@ -203,10 +205,15 @@ function createHarness(options = {}) {
     return response;
   }
   async function files(sequence) {
-    const part = "/" + String(sequence).padStart(3, "0") + "/";
-    return Promise.all(downloads.filter((item) => item.filename.includes(part))
+    const allFolders = [...new Set(downloads.map((item) => item.filename.slice(0, item.filename.lastIndexOf("/"))))];
+    const latest = allFolders[allFolders.length - 1] || "";
+    const batchRoot = latest.slice(0, latest.lastIndexOf("/"));
+    const folders = allFolders.filter((folder) => folder.startsWith(batchRoot + "/"));
+    const folder = typeof sequence === "string" ? folders.find((value) => value.endsWith("/" + sequence)) : folders[sequence - 1];
+    return Promise.all(downloads.filter((item) => item.filename.startsWith(folder + "/"))
       .map(async (item) => ({ ...item, text: await item.blob.text() })));
   }
+
   return { context, chrome, nodes, node, operations, downloads, objects, bodies, tab, clock, flush, emit, request, complete, command, receive, files, finishDownload,
     setScreenshot(value) { screenshot = value; },
     failScreenshots(full, viewport = false) { failFull = full; failViewport = viewport; },

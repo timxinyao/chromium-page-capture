@@ -53,7 +53,7 @@ async function act(command, extra = {}) {
   busy = true;
   if (currentView) render(currentView);
   try {
-    const result = await send(command, { note: node("note").value.trim(), ...extra });
+    const result = await send(command, { note: node("note").value, ...extra });
     busy = false;
     if (result?.view) render(result.view);
     if (!result?.ok) node("status").textContent = result?.error || "操作没有得到确认，请查看记录状态页。";

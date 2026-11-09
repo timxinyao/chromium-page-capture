@@ -1,4 +1,4 @@
-const CAPTURE_VERSION = "0.2.1";
+const CAPTURE_VERSION = "0.3.0";
 const MAX_CAPTURE_MS = 20000;
 const SETTLE_MS = 2600;
 const SAVE_WAIT_MS = 5000;
@@ -88,366 +88,125 @@ function safeUrl(rawUrl) {
   try {
     const u = new URL(rawUrl);
     u.hash = "";
-    for (const key of Array.from(u.searchParams.keys())) {
-      if (isSensitiveKey(key)) u.searchParams.set(key, "[REDACTED]");
-    }
-    return u.href;
+    return redactQueryValuesInText(u.href);
   } catch (_) {
     return redactQueryValuesInText(rawUrl);
   }
 }
 
-function redactJsonValue(value) {
-  if (Array.isArray(value)) return value.map(redactJsonValue);
-  if (value && typeof value === "object") {
-    const out = Object.create(null);
-    for (const [key, child] of Object.entries(value)) {
-      out[key] = isSensitiveKey(key) ? "[REDACTED]" : redactJsonValue(child);
-    }
-    return out;
-  }
-  return value;
-}
-
-function sanitizeBody(text, mimeType) {
-  if (typeof text !== "string") return text;
-  if (/json/i.test(mimeType || "")) {
-    try {
-      return JSON.stringify(redactJsonValue(JSON.parse(text)));
-    } catch (_) {}
-  }
-  if (/application\/x-www-form-urlencoded/i.test(mimeType || "")) {
-    try {
-      const params = new URLSearchParams(text);
-      for (const key of Array.from(params.keys())) {
-        if (isSensitiveKey(key)) params.set(key, "[REDACTED]");
-      }
-      return params.toString();
-    } catch (_) {}
-  }
-  return text;
-}
-
 function queryToHar(rawUrl) {
   try {
-    const u = new URL(rawUrl);
-    return Array.from(u.searchParams.entries()).map(([name, value]) => ({
-      name,
-      value: isSensitiveKey(name) ? "[REDACTED]" : value
+    return Array.from(new URL(rawUrl).searchParams.entries()).map(([name, value]) => ({
+      name, value: isSensitiveKey(name) ? "[REDACTED]" : value
     }));
-  } catch (_) {
-    return [];
-  }
+  } catch (_) { return []; }
+}
+
+function headerValue(headers, name) {
+  const pair = Object.entries(headers || {}).find(([key]) => key.toLowerCase() === name.toLowerCase());
+  return pair ? String(pair[1]) : "";
 }
 
 function contentTypeFromHeaders(headers) {
-  if (!headers || typeof headers !== "object") return "";
-  const pair = Object.entries(headers).find(([name]) => name.toLowerCase() === "content-type");
-  return pair ? String(pair[1]).split(";")[0] : "";
+  return headerValue(headers, "content-type");
 }
 
-function isTextApiMime(mimeType) {
-  return /(json|xml|text\/plain|graphql|x-www-form-urlencoded)/i.test(mimeType || "");
+function bodyFromText(text, contentType, options = {}) {
+  return BodyExport.prepare(text, contentType, isSensitiveKey, { maxBytes: MAX_TEXT_BODY_BYTES, ...options });
 }
 
 function createEntry(params) {
   const request = params.request || {};
-  const url = safeUrl(request.url || "");
-  const started = params.wallTime
-    ? new Date(params.wallTime * 1000).toISOString()
-    : new Date().toISOString();
-  const headers = headersToHar(request.headers);
-  const mimeType = contentTypeFromHeaders(request.headers);
-  let postData;
-  let postDataOmittedReason = "";
-  if (typeof request.postData === "string" && request.postData.length) {
-    if (new TextEncoder().encode(request.postData).length > MAX_TEXT_BODY_BYTES) {
-      postDataOmittedReason = "request body size limit reached";
-    } else if (/multipart\/form-data/i.test(mimeType)) {
-      postDataOmittedReason = "multipart/form-data body omitted for privacy";
-    } else if (/json|application\/x-www-form-urlencoded/i.test(mimeType)) {
-      const clean = sanitizeBody(request.postData, mimeType);
-      if (new TextEncoder().encode(clean).length > MAX_TEXT_BODY_BYTES) {
-        postDataOmittedReason = "request body size limit reached";
-      } else {
-        postData = { mimeType: mimeType || "text/plain", text: clean, params: [] };
-      }
-    } else {
-      postDataOmittedReason = "opaque request body omitted";
-    }
-  }
-  const entry = {
-    startedDateTime: started,
-    time: 0,
+  const contentType = contentTypeFromHeaders(request.headers);
+  const hasText = typeof request.postData === "string";
+  const hasBody = hasText || request.hasPostData === true || Boolean(request.postDataEntries?.length);
+  const requestBody = hasText ? bodyFromText(request.postData, contentType)
+    : hasBody ? BodyExport.missing("incomplete", "request-body-pending", "浏览器声明存在请求正文，正在补取。")
+      : { bodyStatus: "absent" };
+  return {
+    startedDateTime: params.wallTime ? new Date(params.wallTime * 1000).toISOString() : new Date().toISOString(),
     request: {
-      method: request.method || "GET",
-      url,
-      httpVersion: "unknown",
-      cookies: [],
-      headers,
-      queryString: queryToHar(request.url || ""),
-      headersSize: -1,
-      bodySize: typeof request.postData === "string" && !postDataOmittedReason
-        ? new TextEncoder().encode(request.postData).length
-        : -1,
-      ...(postData ? { postData } : {})
+      method: request.method || "GET", url: safeUrl(request.url || ""), headers: headersToHar(request.headers),
+      query: queryToHar(request.url || ""), mimeType: contentType.split(";")[0].trim(), ...requestBody
     },
-    response: {
-      status: 0,
-      statusText: "",
-      httpVersion: "",
-      cookies: [],
-      headers: [],
-      content: {
-        size: 0,
-        mimeType: "x-unknown"
-      },
-      redirectURL: "",
-      headersSize: -1,
-      bodySize: -1
-    },
-    cache: {},
-    timings: {
-      blocked: -1,
-      dns: -1,
-      connect: -1,
-      send: -1,
-      wait: -1,
-      receive: -1,
-      ssl: -1
-    },
-    _requestId: params.requestId || "",
-    _requestType: params.type || "",
-    _bodyOmitted: "",
-    _requestTimestamp: Number(params.timestamp) || 0,
-    _responseTiming: null,
-    _decodedDataLength: 0,
-    _encodedBodyBytes: 0,
-    _totalEncodedTransferSize: -1
+    response: { status: 0, statusText: "", headers: [], mimeType: "", ...BodyExport.missing(
+      "incomplete", "response-pending", "请求尚未完成，尚未取得完整响应正文。") },
+    _requestId: params.requestId || "", _requestType: params.type || "",
+    _requestContentType: contentType, _responseContentType: "", _needsRequestBody: hasBody && !hasText,
+    _decodedDataLength: 0, _encodedBodyBytes: 0, _networkDone: false
   };
-  if (postDataOmittedReason) entry.request._postDataOmittedReason = postDataOmittedReason;
-  return entry;
 }
 
-function normalizeProtocol(protocol) {
-  const value = String(protocol || "").toLowerCase();
-  if (value === "h2") return "HTTP/2";
-  if (value === "h3") return "HTTP/3";
-  if (value.startsWith("http/")) return value.toUpperCase();
-  return value ? value.toUpperCase() : "unknown";
-}
-
-function applyResponse(entry, response) {
-  const headers = response && response.headers ? response.headers : {};
-  const mimeType = response && response.mimeType ? response.mimeType : contentTypeFromHeaders(headers);
-  const protocol = normalizeProtocol(response && response.protocol);
-  entry._responseTiming = response && response.timing ? response.timing : null;
-  entry.request.httpVersion = protocol;
+function applyResponse(entry, response = {}) {
+  const headers = response.headers || {};
+  entry._responseContentType = contentTypeFromHeaders(headers) || response.mimeType || "";
   entry.response = {
-    status: Number(response && response.status) || 0,
-    statusText: response && response.statusText ? response.statusText : "",
-    httpVersion: protocol,
-    cookies: [],
-    headers: headersToHar(headers),
-    content: {
-      size: entry._decodedDataLength || 0,
-      mimeType: mimeType || "x-unknown"
-    },
-    redirectURL: headers.location ? safeUrl(headers.location) : "",
-    headersSize: -1,
-    bodySize: -1
+    status: Number(response.status) || 0, statusText: response.statusText || "", headers: headersToHar(headers),
+    mimeType: response.mimeType || entry._responseContentType.split(";")[0].trim(),
+    ...BodyExport.missing("incomplete", "response-pending", "响应尚未完成，尚未取得完整正文。")
   };
+  const location = headerValue(headers, "location");
+  if (location) entry.response.redirectURL = safeUrl(location);
 }
 
-function responseBodyTransferSize(entry) {
-  if (String(entry.request.method).toUpperCase() === "HEAD") return 0;
-  if (entry._encodedBodyBytes > 0) return entry._encodedBodyBytes;
-  const status = Number(entry.response.status) || 0;
-  if (status === 204 || status === 304 || (status >= 100 && status < 200)) return 0;
-  const contentLength = entry.response.headers.find(
-    (header) => header.name.toLowerCase() === "content-length"
-  );
-  if (contentLength && /^\d+$/.test(contentLength.value)) return Number(contentLength.value);
-  return -1;
+function truncateSegment(value, length) {
+  return value.slice(0, length).replace(/[\uD800-\uDBFF]$/, "").replace(/[. ]+$/g, "");
 }
 
-function applyFinalTiming(entry, finishTimestamp) {
-  const timing = entry._responseTiming;
-  const requestTime = timing && Number.isFinite(timing.requestTime)
-    ? timing.requestTime
-    : entry._requestTimestamp;
-  const total = finishTimestamp > 0 && requestTime > 0
-    ? Math.max(0, (finishTimestamp - requestTime) * 1000)
-    : -1;
-  const delta = (end, start) => Number.isFinite(end) && Number.isFinite(start) &&
-      end >= 0 && start >= 0 && end >= start
-    ? Math.max(0, end - start)
-    : -1;
-  let dns = timing ? delta(timing.dnsEnd, timing.dnsStart) : -1;
-  let ssl = timing ? delta(timing.sslEnd, timing.sslStart) : -1;
-  let connect = timing ? delta(timing.connectEnd, timing.connectStart) : -1;
-  const send = timing ? delta(timing.sendEnd, timing.sendStart) : -1;
-  let wait = timing ? delta(timing.receiveHeadersEnd, timing.sendEnd) : -1;
-  let receive = timing && total >= 0 && Number.isFinite(timing.receiveHeadersEnd) &&
-      timing.receiveHeadersEnd >= 0
-    ? Math.max(0, total - timing.receiveHeadersEnd)
-    : -1;
-  const roundPhase = (value) => value >= 0 ? Math.round(value) : -1;
-  let dnsMs = roundPhase(dns);
-  let connectMs = roundPhase(connect);
-  const sslMs = roundPhase(ssl);
-  let sendMs = roundPhase(send);
-  let waitMs = roundPhase(wait);
-  let receiveMs = roundPhase(receive);
-  const totalMs = total >= 0 ? Math.round(total) : -1;
-  const sumKnown = () => [dnsMs, connectMs, sendMs, waitMs, receiveMs]
-    .filter((value) => value >= 0)
-    .reduce((sum, value) => sum + value, 0);
-
-  if (totalMs >= 0) {
-    if (sumKnown() > totalMs) {
-      dnsMs = -1;
-      connectMs = -1;
-    }
-    if (sumKnown() > totalMs) {
-      let excess = sumKnown() - totalMs;
-      for (const key of ["receive", "wait", "send"]) {
-        const value = key === "receive" ? receiveMs : key === "wait" ? waitMs : sendMs;
-        if (value < 0 || excess <= 0) continue;
-        const reduction = Math.min(value, excess);
-        if (key === "receive") receiveMs -= reduction;
-        if (key === "wait") waitMs -= reduction;
-        if (key === "send") sendMs -= reduction;
-        excess -= reduction;
-      }
-    }
+function safeSegment(value, fallback, length = 72) {
+  let cleaned = String(value || "").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, " ").trim().replace(/[. ]+$/g, "");
+  cleaned = truncateSegment(cleaned, length);
+  if (/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)(?:\.|$)/i.test(cleaned)) {
+    cleaned = truncateSegment("_" + cleaned, length);
   }
-
-  const knownPhases = [dnsMs, connectMs, sendMs, waitMs, receiveMs]
-    .filter((value) => value >= 0)
-    .reduce((sum, value) => sum + value, 0);
-  const blockedMs = totalMs >= 0 ? Math.max(0, totalMs - knownPhases) : -1;
-  entry.time = totalMs >= 0 ? totalMs : 0;
-  entry.timings = {
-    blocked: blockedMs,
-    dns: dnsMs,
-    connect: connectMs,
-    send: sendMs,
-    wait: waitMs,
-    receive: receiveMs,
-    ssl: sslMs
-  };
-}
-
-function decodedBodyBytes(text, base64Encoded) {
-  if (typeof text !== "string") return 0;
-  if (base64Encoded) {
-    try { return atob(text).length; } catch (_) { return 0; }
-  }
-  return new TextEncoder().encode(text).length;
-}
-
-
-function safeSegment(value, fallback) {
-  const cleaned = String(value || "")
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[. ]+$/g, "")
-    .slice(0, 72);
   return cleaned || fallback;
 }
 
-function describeBodyOmission(reason) {
-  const descriptions = {
-    "multipart/form-data body omitted for privacy": "multipart 表单正文已省略",
-    "opaque request body omitted": "无法按已支持格式脱敏的请求正文已省略",
-    "request body size limit reached": "请求正文超过单条保存上限",
-    "response body size limit reached": "响应正文超过单条保存上限",
-    "total text body limit reached": "响应正文累计大小超过保存上限",
-    "response body unavailable": "浏览器未能提供响应正文",
-    "resource type not exported": "请求类别不在导出范围",
-    "non-API or binary response body omitted": "响应正文类型不在保存范围",
-    "stream frames are not captured": "流式消息正文未记录",
-    "request failed": "请求失败，未保存响应正文",
-    "request did not finish before capture limit": "等待时限到达时请求尚未完成，缺少返回",
-    "child session detached": "iframe 子页面连接断开，缺少完整返回"
-  };
-  return descriptions[reason] || reason;
+function allocateSnapshotName(batch, note, sequence) {
+  // Reserve the longest filename and the separators within a 240 UTF-16-unit relative path.
+  const maximum = Math.min(72, 240 - batch.folder.length - "/screenshot-full.png".length - 1);
+  const base = safeSegment(note, sequence, maximum);
+  let candidate = base;
+  let suffix = 2;
+  while (batch.snapshotNames.has(candidate.toLowerCase())) {
+    const ending = "_" + suffix++;
+    candidate = safeSegment(base, sequence, maximum - ending.length) + ending;
+  }
+  batch.snapshotNames.add(candidate.toLowerCase());
+  return candidate;
 }
 
 function makePageExport(targetSession, details = {}) {
-  const entries = targetSession.entries
-    .filter((entry) => {
-      if (!isExcludedRequest(targetSession, entry._base || entry._requestId)) return true;
-      return false;
-    })
-    .filter((entry) => isCaptureRequestType(entry._requestType))
+  const entries = targetSession.entries.filter((entry) =>
+    !isExcludedRequest(targetSession, entry._base || entry._requestId) && isCaptureRequestType(entry._requestType))
     .sort((a, b) => a.startedDateTime.localeCompare(b.startedDateTime));
-  targetSession.exportedRequestCount = entries.length;
-  const records = entries.map((entry) => {
-    const request = { ...entry.request };
-    delete request._postDataOmittedReason;
-    return clone({ request, response: entry.response });
-  });
-  const screenshotMode = details.hasScreenshot === false
-    ? "截图失败"
-    : targetSession.screenshotFallback ? "当前视口（整页截图失败后回退）" : "整页 PNG";
-  const notes = [
-    "页面采集说明",
-    "扩展版本: " + CAPTURE_VERSION,
-    "页面标题: " + (details.pageTitle ?? "未知（未取得当前页面标题）"),
-    "原始页面地址: " + safeUrl(targetSession.pageUrl),
-    "最终页面地址: " + safeUrl(details.finalUrl ?? "未知（未取得当前页面地址）"),
-    "采集时间: " + targetSession.startedAt,
-    "批次目录: " + (targetSession.folder || ""),
-    "采集快照: " + (details.sequence || ""),
-    "",
-    "用户备注:",
-    targetSession.note || "(未填写)",
-    "",
-    "采集范围: Fetch / XHR",
-    "HTTP 方法: 不限，仅记录实际发生的请求",
-    "导出接口数: " + records.length,
-    "排除扩展请求数: " + targetSession.excludedExtensionRequestIds.size,
-    "网络记录状态: " + (targetSession.incomplete ? "不完整" : "未触发不完整标记"),
-    "不完整原因: " + (targetSession.incompleteReason || "无"),
-    "截图: " + screenshotMode,
-    "截图说明: 只捕捉当前已渲染内容，不自动滚动触发懒加载。",
-    "截图与网络记录不是严格原子快照；不展开内部滚动容器中的隐藏内容。",
-    "未完成请求: " + (details.pendingCount || 0),
-    "iframe 覆盖: " + (targetSession.frameCoverage || "未确认"),
-    details.screenshotError ? "截图错误: " + details.screenshotError : null,
-    "",
-    "正文保存规则: JSON、XML、纯文本和 GraphQL 响应正文会保存；二进制及其他类型正文省略。",
-    "正文大小上限: 单条 " + (MAX_TEXT_BODY_BYTES / 1024 / 1024) +
-      " MiB，累计 " + (MAX_TOTAL_BODY_BYTES / 1024 / 1024) + " MiB。",
-    "元数据上限: 未保存记录 " + MAX_RECORDS + " 条 / " + (MAX_METADATA_BYTES / 1024 / 1024) +
-      " MiB（含每条 2 KiB 后续诊断预留）；批次请求标识 " + MAX_REQUEST_KEYS +
-      " 个 / 4 MiB；同时保留子会话 " + MAX_CHILD_SESSIONS + " 个。触限停止记录。",
-    "脱敏规则: 认证类请求头、URL 查询参数及 JSON/URL 编码表单中的常见令牌字段会脱敏；multipart 和其他不支持的请求正文会省略；普通文本正文不做字段级脱敏。",
-    "计时说明: blocked 记录未分类的剩余耗时；ssl 包含在 connect 内，总和不重复计算 ssl。",
-    "大小说明: page.json 的 response.bodySize 为已知正文传输字节数，未知时为 -1；下方总传输量可能包含响应头。",
-    "",
-    "接口诊断（序号与 page.json 数组对应，从 1 开始）:"
-  ].filter((line) => line !== null);
-  if (!entries.length) notes.push("(本次没有符合条件的接口记录)");
-  entries.forEach((entry, index) => {
-    notes.push("", "[" + (index + 1) + "] " + entry.request.method + " " + entry.request.url);
-    notes.push("  请求类别: " + entry._requestType);
-    notes.push("  请求时间: " + entry.startedDateTime);
-    notes.push("  总耗时(ms): " + entry.time);
-    notes.push("  阶段耗时(ms): " + JSON.stringify(entry.timings));
-    notes.push("  总传输量(字节，可能含响应头): " +
-      (entry._totalEncodedTransferSize >= 0 ? entry._totalEncodedTransferSize : "未知"));
-    if (entry.request._postDataOmittedReason) {
-      notes.push("  请求正文说明: " + describeBodyOmission(entry.request._postDataOmittedReason));
+  const warnings = targetSession.issues.map((message) => ({ code: "capture-incomplete", message, observedAt: targetSession.issueTimes.get(message) }));
+  if (details.pendingCount) warnings.push({ code: "pending-requests", message: "本次等待截止时仍有请求尚未完成。", count: details.pendingCount });
+  if (!details.hasScreenshot) warnings.push({ code: "screenshot-failed", message: "截图失败，快照仅包含接口数据。", detail: details.screenshotError });
+  else if (targetSession.screenshotFallback) warnings.push({ code: "screenshot-viewport", message: "整页截图失败，画面回退为当前视口。" });
+  let viewBudget = Math.max(0, MAX_TOTAL_BODY_BYTES - targetSession.totalBodyBytes);
+  const records = entries.map((entry, index) => {
+    const record = clone({ request: entry.request, response: entry.response });
+    for (const side of ["request", "response"]) {
+      const part = record[side];
+      viewBudget -= BodyExport.addReadingView(part, viewBudget, isSensitiveKey);
+      if (part.bodyError) warnings.push({ code: part.bodyError.code, message: part.bodyError.message, entry: index + 1, side });
+      for (const item of part.bodyWarnings || []) warnings.push({ ...item, entry: index + 1, side });
     }
-    if (entry._bodyOmitted) {
-      notes.push("  响应正文说明: " + describeBodyOmission(entry._bodyOmitted));
-    }
+    return record;
   });
-  return { records, noteText: notes.join("\r\n") };
+  return {
+    formatVersion: 2,
+    capture: {
+      pageUrl: safeUrl(details.finalUrl || targetSession.pageUrl), pageTitle: details.pageTitle,
+      capturedAt: details.capturedAt, note: targetSession.note,
+      screenshot: { file: details.hasScreenshot ? "screenshot-full.png" : null,
+        scope: !details.hasScreenshot ? "missing" : targetSession.screenshotFallback ? "viewport" : "full-page" },
+      warnings
+    },
+    entries: records
+  };
 }
 
 function base64ToBlob(base64, type) {
@@ -481,7 +240,10 @@ function isExcludedRequest(batch, base) {
 
 function addIssue(batch, reason) {
   reason = String(reason).slice(0, 2000);
-  if (!batch.issues.includes(reason) && batch.issues.length < 20) batch.issues.push(reason);
+  if (!batch.issues.includes(reason) && batch.issues.length < 20) {
+    batch.issues.push(reason);
+    batch.issueTimes.set(reason, new Date().toISOString());
+  }
   batch.incomplete = true;
   batch.incompleteReason = batch.issues.join("；");
 }
@@ -613,11 +375,11 @@ function excludeExtensionRequest(batch, base) {
 }
 
 function metadataSize(entry) {
-  const value = { ...entry, request: { ...entry.request }, response: { ...entry.response, content: { ...entry.response.content } } };
-  if (value.request.postData) value.request.postData = { ...value.request.postData, text: "" };
-  delete value.response.content.text;
-  // Reserve space for later status/error/timing fields, which are individually bounded.
-  return new TextEncoder().encode(JSON.stringify(value)).length + 2048;
+  const value = { ...entry, request: { ...entry.request }, response: { ...entry.response } };
+  delete value.request.bodyText;
+  delete value.response.bodyText;
+  // Reserve later bounded status and diagnostic fields.
+  return BodyExport.byteLength(JSON.stringify(value)) + 2048;
 }
 
 function refreshMetadata(batch, entry) {
@@ -654,72 +416,91 @@ function addRecord(batch, source, params, base) {
   entry._source = { tabId: source.tabId, ...(source.sessionId ? { sessionId: source.sessionId } : {}) };
   entry._done = false;
   entry._bodyBytes = 0;
-  if (entry.request.postData) {
-    const bytes = new TextEncoder().encode(entry.request.postData.text).length;
-    if (batch.totalBodyBytes + bytes <= MAX_TOTAL_BODY_BYTES) entry._bodyBytes = bytes;
-    else {
-      delete entry.request.postData;
-      entry.request._postDataOmittedReason = "total text body limit reached";
-    }
+  entry._requestBodyBytes = 0;
+  entry._responseBodyBytes = 0;
+  const bytes = BodyExport.byteLength(entry.request.bodyText || "");
+  if (batch.totalBodyBytes + bytes <= MAX_TOTAL_BODY_BYTES) entry._bodyBytes = entry._requestBodyBytes = bytes;
+  else {
+    for (const key of ["bodyText", "bodyWarnings", "bodyError"]) delete entry.request[key];
+    Object.assign(entry.request, BodyExport.missing("omitted", "total-body-limit", "正文累计大小超过 24 MiB 保存上限。"));
   }
   if (!refreshMetadata(batch, entry)) return null;
   batch.totalBodyBytes += entry._bodyBytes;
   batch.records.set(entry._key, entry);
   batch.current.set(base, entry._key);
+  if (entry._needsRequestBody) void readRequestBody(batch, entry);
   return entry;
 }
 
+function canUpdateBody(batch, entry) {
+  return !entry._discarded && !entry._sealed && batch.records.has(entry._key) && !isExcludedRequest(batch, entry._base);
+}
+
+function replaceBody(batch, entry, side, body) {
+  if (!canUpdateBody(batch, entry)) return;
+  const countKey = side === "request" ? "_requestBodyBytes" : "_responseBodyBytes";
+  const oldBytes = entry[countKey] || 0;
+  let bytes = BodyExport.byteLength(body.bodyText || "");
+  if (batch.totalBodyBytes - oldBytes + bytes > MAX_TOTAL_BODY_BYTES) {
+    body = BodyExport.missing("omitted", "total-body-limit", "正文累计大小超过 24 MiB 保存上限。");
+    bytes = 0;
+  }
+  const previous = entry[side];
+  const part = { ...previous };
+  for (const key of ["bodyText", "bodyWarnings", "bodyError", "body", "bodyRepresentation"]) delete part[key];
+  entry[side] = { ...part, ...body };
+  if (!refreshMetadata(batch, entry)) {
+    entry[side] = { ...part, ...BodyExport.missing("omitted", "body-metadata-limit", "正文说明所需元数据触限，已省略正文并停止记录。") };
+    entry[countKey] = 0;
+    entry._bodyBytes -= oldBytes;
+    batch.totalBodyBytes -= oldBytes;
+    return;
+  }
+  entry[countKey] = bytes;
+  entry._bodyBytes += bytes - oldBytes;
+  batch.totalBodyBytes += bytes - oldBytes;
+}
+
+async function readRequestBody(batch, entry) {
+  entry._readingRequestBody = true;
+  try {
+    const result = await cdp(entry._source, "Network.getRequestPostData", { requestId: entry._requestId });
+    if (!result || typeof result.postData !== "string") throw new Error("body unavailable");
+    replaceBody(batch, entry, "request", bodyFromText(result.postData, entry._requestContentType));
+  } catch (_) {
+    replaceBody(batch, entry, "request", BodyExport.missing("unavailable", "request-body-unavailable", "浏览器声明存在请求正文，但补取失败或未提供正文。"));
+  } finally {
+    if (canUpdateBody(batch, entry)) {
+      entry._readingRequestBody = false;
+      if (entry._networkDone) finishEntry(batch, entry);
+      else notifyRecords(batch);
+    }
+  }
+}
+
 function finishEntry(batch, entry, timestamp, notify = true) {
-  if (entry._discarded || entry._sealed || !batch.records.has(entry._key)) return;
-  applyFinalTiming(entry, Number(timestamp) || 0);
-  entry._done = true;
+  if (!canUpdateBody(batch, entry)) return;
+  entry._networkDone = true;
   entry._readingBody = false;
-  if (!isCaptureRequestType(entry._requestType)) removeRecord(batch, entry._key);
+  entry._done = !entry._readingRequestBody;
+  if (entry._done && !isCaptureRequestType(entry._requestType)) removeRecord(batch, entry._key);
   if (notify) notifyRecords(batch);
 }
 
 async function completeEntry(batch, entry, params) {
   entry._readingBody = true;
-  entry._totalEncodedTransferSize = Math.max(0, Number(params.encodedDataLength) || 0);
-  entry.response.content.size = Math.max(0, entry._decodedDataLength);
-  entry.response.bodySize = responseBodyTransferSize(entry);
-  const mime = entry.response.content.mimeType;
-  if (!isCaptureRequestType(entry._requestType) || !isTextApiMime(mime)) {
-    entry._bodyOmitted = "non-API or binary response body omitted";
-  } else if (entry._decodedDataLength > MAX_TEXT_BODY_BYTES) {
-    entry._bodyOmitted = "response body size limit reached";
-  } else if (batch.totalBodyBytes >= MAX_TOTAL_BODY_BYTES) {
-    entry._bodyOmitted = "total text body limit reached";
+  const mime = entry._responseContentType || entry.response.mimeType;
+  if (!isCaptureRequestType(entry._requestType) || BodyExport.isBinaryMime(mime)) {
+    replaceBody(batch, entry, "response", BodyExport.missing("omitted", "binary-body", "二进制或范围外的响应正文已省略。"));
   } else {
     try {
       const body = await cdp(entry._source, "Network.getResponseBody", { requestId: entry._requestId });
-      if (entry._discarded || entry._sealed || isExcludedRequest(batch, entry._base)) return;
-      if (!body || typeof body.body !== "string") throw new Error("empty body response");
-      const bytes = decodedBodyBytes(body.body, body.base64Encoded);
-      if (bytes > MAX_TEXT_BODY_BYTES) entry._bodyOmitted = "response body size limit reached";
-      else if (batch.totalBodyBytes + bytes > MAX_TOTAL_BODY_BYTES) entry._bodyOmitted = "total text body limit reached";
-      else {
-        // Text MIME bodies can be base64 encoded by CDP as well. Decode before redaction.
-        let text = body.body;
-        const needsRedaction = /json|application\/x-www-form-urlencoded/i.test(mime);
-        if (body.base64Encoded && needsRedaction) {
-          const binary = atob(text);
-          text = new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
-        }
-        const clean = sanitizeBody(text, mime);
-        const retained = new TextEncoder().encode(clean).length;
-        if (retained > MAX_TEXT_BODY_BYTES) entry._bodyOmitted = "response body size limit reached";
-        else if (batch.totalBodyBytes + retained > MAX_TOTAL_BODY_BYTES) entry._bodyOmitted = "total text body limit reached";
-        else {
-          entry.response.content.text = clean;
-          if (body.base64Encoded && !needsRedaction) entry.response.content.encoding = "base64";
-          entry.response.content.size = bytes;
-          entry._bodyBytes += retained;
-          batch.totalBodyBytes += retained;
-        }
-      }
+      if (!canUpdateBody(batch, entry) || entry._networkDone) return;
+      if (!body || typeof body.body !== "string") throw new Error("body unavailable");
+      replaceBody(batch, entry, "response", bodyFromText(body.body, mime, { base64Encoded: body.base64Encoded === true }));
     } catch (_) {
-      if (!entry._sealed) entry._bodyOmitted = "response body unavailable";
+      if (!canUpdateBody(batch, entry) || entry._networkDone) return;
+      replaceBody(batch, entry, "response", BodyExport.missing("unavailable", "response-body-unavailable", "浏览器未能提供响应正文。"));
     }
   }
   finishEntry(batch, entry, params.timestamp);
@@ -727,11 +508,11 @@ async function completeEntry(batch, entry, params) {
 
 function applyBoundedResponse(batch, entry, response) {
   const oldResponse = entry.response;
-  const oldTiming = entry._responseTiming;
+  const oldContentType = entry._responseContentType;
   applyResponse(entry, response);
   if (!refreshMetadata(batch, entry)) {
     entry.response = oldResponse;
-    entry._responseTiming = oldTiming;
+    entry._responseContentType = oldContentType;
     return false;
   }
   return true;
@@ -796,9 +577,7 @@ function onDebuggerEvent(source, method, params = {}) {
       admittedRedirect = Boolean(batch.operation && !batch.operation.frozen && batch.operation.keys.has(entry._key));
       if (params.type) entry._requestType = params.type;
       if (!applyBoundedResponse(batch, entry, params.redirectResponse)) return;
-      entry._totalEncodedTransferSize = Number(params.redirectResponse.encodedDataLength) || -1;
-      entry.response.bodySize = responseBodyTransferSize(entry);
-      entry._bodyOmitted = "response body unavailable";
+      replaceBody(batch, entry, "response", BodyExport.missing("unavailable", "redirect-body-unavailable", "浏览器未提供重定向阶段的正文。"));
       finishEntry(batch, entry, params.timestamp, false);
     }
     entry = addRecord(batch, source, params, base);
@@ -806,12 +585,12 @@ function onDebuggerEvent(source, method, params = {}) {
     notifyRecords(batch);
     return;
   }
-  if (!entry || entry._done || entry._sealed || isExcludedRequest(batch, base)) return;
+  if (!entry || entry._done || entry._sealed || entry._networkDone || isExcludedRequest(batch, base)) return;
   if (method === "Network.responseReceived") {
     if (params.type) entry._requestType = params.type;
     if (!applyBoundedResponse(batch, entry, params.response)) return;
-    if (/text\/event-stream/i.test(entry.response.content.mimeType)) {
-      entry._bodyOmitted = "stream frames are not captured";
+    if (/text\/event-stream/i.test(entry.response.mimeType)) {
+      replaceBody(batch, entry, "response", BodyExport.missing("incomplete", "stream-not-captured", "流式消息正文未记录。"));
       finishEntry(batch, entry, params.timestamp);
     }
   } else if (method === "Network.dataReceived") {
@@ -820,11 +599,8 @@ function onDebuggerEvent(source, method, params = {}) {
   } else if (method === "Network.loadingFinished" && !entry._readingBody) {
     void completeEntry(batch, entry, params);
   } else if (method === "Network.loadingFailed") {
-    entry.response.status = 0;
-    entry.response.statusText = String(params.errorText || "request failed").slice(0, 1000);
-    entry.response.content.size = entry._decodedDataLength;
-    entry.response.bodySize = responseBodyTransferSize(entry);
-    entry._bodyOmitted = "request failed";
+    entry.response.networkError = String(params.errorText || "request failed").slice(0, 1000);
+    replaceBody(batch, entry, "response", BodyExport.missing("unavailable", "network-failed", "请求失败，无法取得完整响应正文。"));
     finishEntry(batch, entry, params.timestamp);
   }
 }
@@ -882,7 +658,11 @@ function detachChild(batch, sessionId) {
       entry._sealed = true;
       entry._done = true;
       entry._unfinished = true;
-      entry._bodyOmitted = "child session detached";
+      for (const side of ["request", "response"]) {
+        if (entry[side].bodyStatus === "incomplete" && !entry[side].bodyText) {
+          Object.assign(entry[side], BodyExport.missing("incomplete", "child-session-detached", "iframe 子页面连接断开，缺少完整返回。"));
+        }
+      }
     }
   }
   notifyRecords(batch);
@@ -938,7 +718,7 @@ async function beginBatch(batch) {
     batch.pageTitle = tab.title || "";
     batch.pageUrl = tab.url;
     const stamp = batch.startedAt.replace(/[:.]/g, "-").replace("T", "_").replace("Z", "");
-    batch.folder = "PageCapture/" + stamp + "_" + safeSegment(new URL(tab.url).hostname, "site") + "_" + safeSegment(tab.title, "page");
+    batch.folder = "PageCapture/" + stamp + "_" + safeSegment(new URL(tab.url).hostname, "site", 48) + "_" + safeSegment(tab.title, "page", 48);
     batch.leaseRequested = true;
     await connectionCommand(batch, "acquire");
     batch.attached = true;
@@ -977,7 +757,7 @@ async function beginBatch(batch) {
       if (!batch.loadSeen) addIssue(batch, "首次准备 20 秒内未收到页面 load 事件");
       startSnapshot(batch, "initial", batch.firstNote);
     }, MAX_CAPTURE_MS);
-    update(batch, "initial", "已开启记录，正在自动刷新一次。页面加载后自动保存 001，随后持续记录。");
+    update(batch, "initial", "已开启记录，正在自动刷新一次。页面加载后自动保存首份，随后持续记录。");
     await cdp(batch.target, "Page.reload", { ignoreCache: false });
   } catch (error) {
     interruptBatch(batch, "无法完成首次准备：" + errorText(error));
@@ -990,8 +770,8 @@ function createBatch(tabId, note) {
     tabId, target: { tabId }, phase: "initial", message: "正在连接业务页面…",
     startedAt: new Date().toISOString(), pageTitle: "", pageUrl: "", folder: "", currentPage: { url: null, title: null },
     firstNote: note, collecting: false, attached: false, detaching: false,
-    interrupted: false, issues: [], incomplete: false, incompleteReason: "", frameCoverage: "正在检测",
-    records: new Map(), current: new Map(), children: new Map(), requestKeys: new Set(),
+    interrupted: false, issues: [], issueTimes: new Map(), incomplete: false, incompleteReason: "", frameCoverage: "正在检测",
+    records: new Map(), current: new Map(), children: new Map(), requestKeys: new Set(), snapshotNames: new Set(),
     requestParents: new Map(), excludedExtensionRequestIds: new Set(),
     keyBytes: 0, metadataBytes: 0, totalBodyBytes: 0, recordSequence: 0,
     waiters: new Set(), childTasks: new Set(), loadSeen: false, savedCount: 0, missingScreenshots: 0, operation: null, snapshot: null
@@ -1101,7 +881,7 @@ async function prepareSnapshot(batch, operation) {
     const entry = batch.records.get(key);
     return entry && !isExcludedRequest(batch, entry._base) && (entry._done || operation.ending);
   });
-  if (operation.ending && !keys.length) {
+  if (operation.ending && !keys.length && !batch.issues.length) {
     batch.operation = null;
     await finishBatch(batch, "本批已结束；没有剩余接口，不生成空末份。");
     return;
@@ -1109,12 +889,13 @@ async function prepareSnapshot(batch, operation) {
   const entries = keys.map((key) => {
     const entry = clone(batch.records.get(key));
     if (!entry._done) {
-      entry._bodyOmitted = "request did not finish before capture limit";
       entry._unfinished = true;
-      entry.response.content.size = entry._decodedDataLength;
-      entry.response.bodySize = responseBodyTransferSize(entry);
-      // A received HTTP status is metadata, never synthesize a successful response for a pending request.
-      applyFinalTiming(entry, 0);
+      if (!entry._networkDone) {
+        Object.assign(entry.response, BodyExport.missing("incomplete", "request-incomplete", "等待截止时请求尚未完成，缺少完整返回。"));
+        delete entry.response.bodyText;
+      }
+      if (entry._readingRequestBody) Object.assign(entry.request,
+        BodyExport.missing("incomplete", "request-body-incomplete", "等待截止时请求正文补取尚未完成。"));
     }
     return entry;
   });
@@ -1130,20 +911,21 @@ async function prepareSnapshot(batch, operation) {
     incomplete: batch.incomplete || pendingKeys.length > 0,
     incompleteReason: [batch.incompleteReason, pendingKeys.length ? "本次等待截止时仍有请求尚未完成" : ""].filter(Boolean).join("；")
   };
-  const exported = makePageExport(exportSession, {
+  let exported = makePageExport(exportSession, {
     ...page,
-    sequence, pendingCount: pendingKeys.length, hasScreenshot: Boolean(screenshot), screenshotError
+    sequence, capturedAt: new Date().toISOString(), pendingCount: pendingKeys.length, hasScreenshot: Boolean(screenshot), screenshotError
   });
   const files = [
-    { name: "page.json", blob: new Blob([JSON.stringify(exported.records, null, 2)], { type: "application/json;charset=utf-8" }) },
-    { name: "note.txt", blob: new Blob([exported.noteText], { type: "text/plain;charset=utf-8" }) }
+    { name: "page.json", blob: new Blob([JSON.stringify(exported, null, 2)], { type: "application/json;charset=utf-8" }) }
   ];
   if (screenshot) files.push({ name: "screenshot-full.png", blob: base64ToBlob(screenshot.data, "image/png") });
   batch.snapshot = {
-    keys, sequence, folder: batch.folder + "/" + sequence, ending: operation.ending,
-    count: exported.records.length, missingScreenshot: !screenshot, fallback: Boolean(screenshot && screenshot.fallback),
+    keys, sequence, folder: batch.folder + "/" + allocateSnapshotName(batch, operation.note, sequence), ending: operation.ending,
+    count: exported.entries.length, missingScreenshot: !screenshot, fallback: Boolean(screenshot && screenshot.fallback),
     files: files.map((file) => ({ ...file, status: "pending", downloadId: null, objectUrl: null, error: "" }))
   };
+  // Frozen blobs own the export now. Reading-view objects never reserve later body capacity.
+  exported = null;
   batch.operation = null;
   await saveSnapshot(batch);
 }
@@ -1246,6 +1028,7 @@ async function saveSnapshot(batch) {
     ? "接口已保存，截图失败" : snapshot.fallback ? "已保存，截图回退为当前视口" : "已保存");
   batch.snapshot = null;
   if (snapshot.ending) {
+    update(batch, "ending", batch.lastSaved + "。正在释放本批连接。");
     await finishBatch(batch, batch.lastSaved + "。本批已结束。" + (batch.incomplete ? " 网络记录不完整，详见说明。" : ""));
   } else if (batch.interrupted) {
     update(batch, "interrupted", batch.lastSaved + "。记录已中断，可补导出其余已收数据或明确放弃并结束。");
@@ -1269,7 +1052,7 @@ function executeCommand(message) {
   const command = message.command;
   if (command === "status") return { ok: true, view: getView() };
   if (message.commandId && handledCommands.has(message.commandId)) return { ok: true, duplicate: true, view: getView() };
-  const note = String(message.note || "").trim().slice(0, 4000);
+  const note = String(message.note || "").slice(0, 4000);
   const batch = session;
   let error = "";
   if (command === "start") {
